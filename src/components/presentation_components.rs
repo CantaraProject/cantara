@@ -638,7 +638,21 @@ pub fn PresentationRendererComponent(
             None => 0,
         });
 
-    let mut presentation_is_visible = use_signal(|| false);
+    // Starts *shown*, and is flipped off and on again to replay the entry
+    // animation — see the timer below and `onmounted`.
+    //
+    // It used to start hidden, so the slide appeared only once the element had
+    // mounted. That is a browser event, and a rendering that never gets one
+    // therefore had no slide in it at all: the network stream, which renders
+    // these very components to HTML (see
+    // [`crate::components::stream_render`]), came out as a background and
+    // nothing else. Content that exists only after a mount is content no
+    // server-side rendering can produce.
+    //
+    // The animation is unaffected: it is a CSS class on the slide container,
+    // and a CSS animation plays when the element is inserted into the document
+    // — which happens on the first render either way.
+    let mut presentation_is_visible = use_signal(|| true);
 
     let is_black_screen =
         use_memo(move || running_presentation.read().is_black_screen);

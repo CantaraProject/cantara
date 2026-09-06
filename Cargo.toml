@@ -40,6 +40,12 @@ rgb = { version = "0.8.52", features = ["serde"] }
 # direct one costs no compilation. Default features include `clock` (the local
 # offset) and `wasmbind`, which is what makes `Local` work in the browser too.
 chrono = "0.4"
+
+# Renders Cantara's own components to HTML, so that what a phone on the network
+# is shown comes out of the same components as what the projector shows. It was
+# a dev-dependency, used only to assert on rendered markup in tests; the stream
+# now renders through it at runtime. See `crate::components::stream_render`.
+dioxus-ssr = "0.7"
 # Decodes the pictures of a library so they can be scaled down to list
 # thumbnails; `png` is also what the window icon is loaded from.
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
@@ -173,7 +179,8 @@ incremental = false
 # Renders a component to a string without a window, so that a test can assert
 # what a slide actually looks like — and, in particular, that it changes when
 # the design does. See the reactivity tests in
-# `components::presentation_components`. Same family and licence as the rest of
-# Dioxus, and test-only.
+# `components::presentation_components`.
+#
+# `dioxus-ssr` moved up to a real dependency when the network stream started
+# rendering through it — see the note beside it there.
 [dev-dependencies]
-dioxus-ssr = "0.7"

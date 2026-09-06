@@ -1,7 +1,6 @@
 //! This module provides components for adjusting the presentation designs
 
 use crate::components::font_settings::FontRepresentationsComponent;
-use crate::components::presentation_components::StaticSlideRendererComponent;
 use crate::components::dialogs::message_box;
 use crate::components::shared_components::{
     MetadataFieldset, NumberedValidatedLengthInput, RangeInput, SettingsSkeleton,

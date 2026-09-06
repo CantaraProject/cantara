@@ -36,10 +36,10 @@ use std::time::Duration;
 ///
 /// The cost is the cost of a wall clock: it can be set backwards, by the user
 /// or by NTP, and an elapsed time measured across that is wrong. So
-/// [`elapsed`](Self::elapsed) saturates at zero rather than going negative —
-/// a timer on a platform monitor that reads `0:00` for a moment is a great
-/// deal better than one that reads something impossible, and a service is not
-/// where a clock correction should produce a panic.
+/// [`elapsed_at`](Self::elapsed_at) saturates at zero rather than going
+/// negative — a timer on a platform monitor that reads `0:00` for a moment is a
+/// great deal better than one that reads something impossible, and a service is
+/// not where a clock correction should produce a panic.
 ///
 /// A whole number of milliseconds, and not an `f64`, for a reason that cost an
 /// afternoon: **`serde_json` does not read floats back exactly.** Its default
@@ -68,6 +68,7 @@ impl Timestamp {
     /// Builds one from a count of milliseconds since the Unix epoch.
     ///
     /// For tests, and for reading a time that came from somewhere else.
+    #[cfg_attr(not(test), allow(dead_code, reason = "a fixed time is what tests need"))]
     pub fn from_milliseconds(milliseconds: i64) -> Self {
         Timestamp(milliseconds)
     }
@@ -75,14 +76,6 @@ impl Timestamp {
     /// The count of milliseconds since the Unix epoch.
     pub fn milliseconds(self) -> i64 {
         self.0
-    }
-
-    /// How long ago this was.
-    ///
-    /// Zero for a time in the future, which is what a clock set backwards
-    /// since this was taken looks like from here. See the note on the type.
-    pub fn elapsed(self) -> Duration {
-        self.elapsed_at(Timestamp::now())
     }
 
     /// The same, against a stated `now`.

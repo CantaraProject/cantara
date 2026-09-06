@@ -66,6 +66,12 @@ pub mod presentation_components;
 /// one the congregation does.
 pub mod monitor_view;
 
+/// Rendering a presentation to HTML for the network, out of the very same
+/// components the window draws. There is no server in a browser, and nothing
+/// there to render for.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stream_render;
+
 pub mod presentation_design_settings_components;
 
 pub mod settings_components;

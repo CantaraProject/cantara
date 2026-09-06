@@ -384,6 +384,10 @@ pub const ASSETS_PREFIX: &str = "/assets";
 /// The stream server cannot be named from here on every target, so a test in
 /// that module checks each route it declares against this list. That test is
 /// what keeps the two from drifting; this array is where the answer lives.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "read by `check_network_path`, which no editor calls yet")
+)]
 const RESERVED_PATHS: &[&str] = &[
     CONSOLE_PATH,
     ASSETS_PREFIX,
@@ -401,6 +405,7 @@ const RESERVED_PATHS: &[&str] = &[
 /// Kept apart from the message shown for it so that the reason can be
 /// translated where it is displayed, rather than English being baked in here.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "no editor offers a path to type yet"))]
 pub enum PathProblem {
     /// Empty, or only a slash and nothing else.
     Empty,
@@ -423,6 +428,7 @@ pub enum PathProblem {
 ///
 /// `/` itself is allowed and is the stream's own path: the bare address is
 /// what a congregation is given, and it was the viewer's before views existed.
+#[cfg_attr(not(test), allow(dead_code, reason = "no editor offers a path to type yet"))]
 pub fn check_network_path(path: &str) -> Result<(), PathProblem> {
     if path == "/" {
         return Ok(());
@@ -1176,9 +1182,7 @@ impl Settings {
     /// stage 3b of the spec it is also the only one the helper can serve —
     /// which is why this answers "the stream" rather than "the streams".
     pub fn stream_view(&self) -> Option<&View> {
-        self.views
-            .iter()
-            .find(|view| matches!(view.output, ViewOutput::Network { .. }))
+        self.views.get(self.stream_view_index()?)
     }
 
     /// Where [`stream_view`](Self::stream_view) is in the list, for an editor
@@ -2236,7 +2240,7 @@ impl DesignKind {
 /// It shows the same presentation as the wall, read differently — what is up,
 /// what is next, how long this has been going on. It never controls anything;
 /// the one place that drives a presentation is the presenter console.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct MonitorDesign {
     /// The look it shares with an audience design: fonts, colours, padding.
     ///
@@ -2252,16 +2256,6 @@ pub struct MonitorDesign {
 
     /// What is shown alongside them.
     pub widgets: Vec<MonitorWidget>,
-}
-
-impl Default for MonitorDesign {
-    fn default() -> Self {
-        MonitorDesign {
-            base: PresentationDesignTemplate::default(),
-            layout: MonitorLayout::default(),
-            widgets: Vec::new(),
-        }
-    }
 }
 
 /// How a monitor view arranges the slides.
@@ -3378,8 +3372,10 @@ mod tests {
     /// The screen the projection was set to is the screen its view uses.
     #[test]
     fn the_projections_screen_is_carried_into_its_view() {
-        let mut settings = Settings::default();
-        settings.presentation_screen = Some("HDMI-2".to_string());
+        let mut settings = Settings {
+            presentation_screen: Some("HDMI-2".to_string()),
+            ..Settings::default()
+        };
 
         settings.ensure_views();
 
@@ -3414,8 +3410,10 @@ mod tests {
     /// changing the default afterwards would silently stop reaching it.
     #[test]
     fn the_projection_view_names_no_design_of_its_own() {
-        let mut settings = Settings::default();
-        settings.default_design_index = 1;
+        let mut settings = Settings {
+            default_design_index: 1,
+            ..Settings::default()
+        };
         settings.presentation_designs.push(PresentationDesign::default());
 
         settings.ensure_views();
@@ -3428,7 +3426,7 @@ mod tests {
     #[test]
     fn views_that_exist_are_left_alone() {
         let mut settings = Settings::default();
-        settings.views = vec![View {
+        settings.views.push(View {
             id: uuid::Uuid::new_v4(),
             name: "Only this one".to_string(),
             design_index: None,
@@ -3436,7 +3434,7 @@ mod tests {
             output: ViewOutput::Screen { monitor_name: None },
             enabled: true,
             focus: ViewFocus::Follow,
-        }];
+        });
 
         settings.ensure_views();
 
@@ -3629,7 +3627,7 @@ mod tests {
     #[test]
     fn deleting_a_view_before_the_reference_moves_the_reference() {
         let mut settings = Settings::default();
-        settings.views = vec![
+        settings.views.extend([
             View {
                 id: uuid::Uuid::new_v4(),
                 name: "First".to_string(),
@@ -3648,7 +3646,7 @@ mod tests {
                 enabled: true,
                 focus: ViewFocus::Follow,
             },
-        ];
+        ]);
         settings.reference_view_index = 1;
 
         assert!(settings.delete_view(0));
@@ -3771,9 +3769,11 @@ mod tests {
     /// decides it belongs on a stage monitor keeps all of it.
     #[test]
     fn switching_a_design_to_a_monitor_keeps_the_look_it_was_given() {
-        let mut template = PresentationDesignTemplate::default();
-        template.background_color = RGB8::new(12, 34, 56);
-        template.title_bold = true;
+        let template = PresentationDesignTemplate {
+            background_color: RGB8::new(12, 34, 56),
+            title_bold: true,
+            ..PresentationDesignTemplate::default()
+        };
         let audience = PresentationDesignSettings::Template(template.clone());
 
         let monitor = audience.into_kind(DesignKind::Monitor);
@@ -3785,8 +3785,10 @@ mod tests {
     /// And back again, so that changing one's mind costs nothing either.
     #[test]
     fn switching_back_to_an_audience_design_keeps_the_look_too() {
-        let mut template = PresentationDesignTemplate::default();
-        template.background_color = RGB8::new(12, 34, 56);
+        let template = PresentationDesignTemplate {
+            background_color: RGB8::new(12, 34, 56),
+            ..PresentationDesignTemplate::default()
+        };
         let monitor = PresentationDesignSettings::Monitor(MonitorDesign {
             base: template.clone(),
             ..MonitorDesign::default()
