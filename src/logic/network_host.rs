@@ -444,9 +444,34 @@ pub fn publish(presentation: Option<RunningPresentation>) {
     }
     helper.last_sent = presentation.clone();
 
+    // The slide as HTML, drawn by the very same components the projector
+    // uses — see [`crate::components::stream_render`]. Rendered *here*,
+    // once per change, rather than by the helper (which has no library and
+    // no settings) or per viewer (which is what ruled out a liveview
+    // session each).
+    //
+    // Which design is a question the presentation answers for itself:
+    // `get_current_stream_design` is what `StreamState::of` already reads,
+    // so the rendering and the rest of the payload cannot disagree about
+    // what the phones are being shown.
+    let rendered = presentation.as_ref().map(|running| {
+        crate::components::stream_render::for_network(
+            &crate::components::stream_render::render_presentation(
+                running,
+                Some(running.get_current_stream_design()),
+            ),
+        )
+    });
+
     // A helper that will not take it is a helper that has gone. Dropping it
     // here is what puts the switches back to where the truth is.
-    if !tell(helper, ToChild::Presentation(Box::new(presentation))) {
+    if !tell(
+        helper,
+        ToChild::Presentation {
+            presentation: Box::new(presentation),
+            rendered,
+        },
+    ) {
         log::warn!("the network server stopped listening; it is off");
         held.take();
     }

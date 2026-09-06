@@ -92,6 +92,62 @@ pub fn render_presentation(
     dioxus_ssr::render(&dom)
 }
 
+/// The same rendering, with its addresses rewritten for another device.
+///
+/// A rendering is made for the machine it was made on, and two of the
+/// addresses in it mean nothing anywhere else:
+///
+/// * `/cantara-video/…` is answered by the asset handler inside Cantara's own
+///   web view — see [`crate::components::video_host`]. A phone asking its own
+///   origin for that gets nothing.
+/// * On the WebKitGTK platforms it is worse: a video's `src` is an absolute
+///   `http://127.0.0.1:…` URL, because that engine will not play media from a
+///   custom scheme (see [`crate::logic::video::video_source_url`]). *Loopback*
+///   on a phone is the phone.
+///
+/// Both become `video/…` on the stream's own origin, which
+/// [`crate::logic::stream::server`] answers from the files of the running
+/// service. The path after the handler is left exactly as it is: it is the
+/// encoded file path, and it is what the server looks the file up by.
+///
+/// Pictures need no rewriting — they are inlined as data URLs and carry their
+/// own bytes.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "used once the stream serves the rendering; tested and documented meanwhile"
+    )
+)]
+pub fn for_network(html: &str) -> String {
+    // An optional origin in front, so that the absolute form loses its
+    // `http://127.0.0.1:1234` as well rather than being left with a URL
+    // pointing at the viewer's own machine.
+    //
+    // Built once. A pattern that will not compile is not a reason to stop a
+    // service — the rendering goes out with its addresses as they were, which
+    // costs the viewers a video they could not have played anyway. Everything
+    // else in the slide still arrives.
+    static PATTERN: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        match regex::Regex::new(&format!(
+            r#"(?:https?://[^"'\s]*?)?/{}/"#,
+            regex::escape(crate::logic::video::VIDEO_HANDLER)
+        )) {
+            Ok(pattern) => Some(pattern),
+            Err(error) => {
+                log::error!("the video address pattern did not compile: {error}");
+                None
+            }
+        }
+    });
+
+    match pattern {
+        Some(pattern) => pattern.replace_all(html, "video/").into_owned(),
+        None => html.to_string(),
+    }
+}
+
 /// The root of a rendering that has no window.
 ///
 /// Its only job is to turn the value it is given into the signal the
@@ -353,6 +409,87 @@ mod tests {
             render_presentation(&running, None),
             render_presentation(&running, None)
         );
+    }
+
+    // ── Addresses that have to survive the journey ──────────────────────
+
+    /// The ordinary form: a path on Cantara's own origin becomes one on the
+    /// stream's.
+    #[test]
+    fn a_videos_address_is_rewritten_for_the_network() {
+        let handler = crate::logic::video::VIDEO_HANDLER;
+        let html = format!(r#"<video src="/{handler}/Der%20Film.mp4"></video>"#);
+
+        assert_eq!(
+            for_network(&html),
+            r#"<video src="video/Der%20Film.mp4"></video>"#
+        );
+    }
+
+    /// The WebKitGTK form, which is the one that would fail most confusingly:
+    /// loopback on a phone is the phone, so the viewer would ask itself for the
+    /// video and be told nothing is there.
+    #[test]
+    fn an_absolute_loopback_address_loses_its_origin_too() {
+        let handler = crate::logic::video::VIDEO_HANDLER;
+        let html = format!(r#"<video src="http://127.0.0.1:8431/{handler}/clip.mp4"></video>"#);
+
+        assert_eq!(
+            for_network(&html),
+            r#"<video src="video/clip.mp4"></video>"#
+        );
+    }
+
+    /// A service may have more than one video in it, and a rewrite that only
+    /// did the first would leave the rest pointing nowhere.
+    #[test]
+    fn every_address_in_a_rendering_is_rewritten() {
+        let handler = crate::logic::video::VIDEO_HANDLER;
+        let html = format!(
+            r#"<video src="/{handler}/one.mp4"></video><video src="/{handler}/two.mp4"></video>"#
+        );
+
+        let rewritten = for_network(&html);
+
+        assert!(rewritten.contains(r#"src="video/one.mp4""#));
+        assert!(rewritten.contains(r#"src="video/two.mp4""#));
+        assert!(
+            !rewritten.contains(handler),
+            "an address was left pointing at Cantara's own handler: {rewritten}"
+        );
+    }
+
+    /// The encoded path after the handler is what the server looks the file up
+    /// by, so it has to come through untouched — including the characters that
+    /// made it need encoding in the first place.
+    #[test]
+    fn the_encoded_path_is_left_exactly_as_it_is() {
+        let handler = crate::logic::video::VIDEO_HANDLER;
+        let html = format!(r#"<video src="/{handler}/Ordner%2FDer%20Film%20%232.mp4"></video>"#);
+
+        assert!(
+            for_network(&html).contains("video/Ordner%2FDer%20Film%20%232.mp4"),
+            "the encoded path was altered"
+        );
+    }
+
+    /// A rendering with nothing to rewrite comes back untouched — a picture is
+    /// inlined as a data URL and carries its own bytes, and words need no
+    /// address at all.
+    #[test]
+    fn a_rendering_without_a_video_is_unchanged() {
+        let html = r#"<div class="presentation"><p>Amazing grace</p></div>"#;
+
+        assert_eq!(for_network(html), html);
+    }
+
+    /// A data URL must not be mangled by the rewrite: it is how every picture
+    /// in a rendering travels.
+    #[test]
+    fn an_inlined_picture_survives_the_rewrite() {
+        let html = r#"<div style="background-image:url(data:image/png;base64,iVBORw0KGgo=)"></div>"#;
+
+        assert_eq!(for_network(html), html);
     }
 
     /// Moving the presentation changes the rendering. The obvious property,

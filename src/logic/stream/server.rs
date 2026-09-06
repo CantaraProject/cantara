@@ -334,10 +334,42 @@ fn router(shared: Arc<Shared>) -> Router {
 }
 
 
+/// The stylesheets of the components that draw a slide.
+///
+/// A viewer is served markup made by Cantara's own components — see
+/// [`crate::components::stream_render`] — and those components' rules live
+/// here. Without them the slide arrives correct and unstyled.
+///
+/// The same reasoning as the console's page, which compiles its stylesheets in
+/// for the same reason: the network this page arrives on frequently has no way
+/// out, and a second request that may not be answered is worse than a larger
+/// first one.
+///
+/// `presentation.css` draws the slide itself. The other two are what a
+/// *monitor* design needs — its layout is the presenter console's slide list,
+/// shared rather than written twice, so the console's sheet comes with it.
+const PRESENTATION_CSS: &str = include_str!("../../../assets/presentation.css");
+const CONSOLE_CSS: &str = include_str!("../../../assets/presenter_console.css");
+const MONITOR_CSS: &str = include_str!("../../../assets/monitor_view.css");
+
+/// Where [`VIEWER_PAGE`] expects those stylesheets.
+const STYLE_MARKER: &str = "/*CANTARA_COMPONENT_STYLES*/";
+
 async fn page() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        VIEWER_PAGE,
+        dressed_viewer_page(),
+    )
+}
+
+/// The viewer page with the component stylesheets in it.
+///
+/// Split out from the handler so that what is served can be asserted on
+/// without a socket.
+fn dressed_viewer_page() -> String {
+    VIEWER_PAGE.replace(
+        STYLE_MARKER,
+        &format!("{PRESENTATION_CSS}\n{CONSOLE_CSS}\n{MONITOR_CSS}"),
     )
 }
 
@@ -1430,6 +1462,126 @@ mod tests {
         assert!(cookie.contains("HttpOnly"), "got: {cookie}");
         assert!(cookie.contains("SameSite=Lax"), "got: {cookie}");
         assert!(cookie.starts_with("cantara_stream=s3cret-session;"), "got: {cookie}");
+    }
+
+    /// The page arrives with the stylesheets of the components that drew the
+    /// slide in it.
+    ///
+    /// The markup a viewer is served is made by Cantara's own components, and
+    /// their rules live in Cantara's own stylesheets. Without them the slide is
+    /// correct and unstyled, which is the difference between "the same as the
+    /// projection" and "a wall of text". Nothing else would notice: the state
+    /// would be right, the markup would be right, and the screen would be
+    /// wrong.
+    #[test]
+    fn the_page_carries_the_stylesheets_of_what_it_shows() {
+        let page = dressed_viewer_page();
+
+        assert!(!page.contains(STYLE_MARKER), "the stylesheets were not put in");
+        // A rule from each of the three, so that dropping one is caught.
+        assert!(page.contains(".presentation"), "presentation.css is missing");
+        assert!(
+            page.contains(".presenter-text-panel"),
+            "the console's sheet is missing, so a monitor design's slide list is unstyled"
+        );
+        assert!(page.contains(".monitor-view"), "the monitor sheet is missing");
+    }
+
+    /// The page no longer draws a slide, so nothing in it may claim to.
+    ///
+    /// This is what keeps the duplication from creeping back: a second
+    /// renderer is easy to reintroduce a function at a time, and each one on
+    /// its own looks reasonable.
+    #[test]
+    fn the_page_does_not_draw_slides_any_more() {
+        for gone in ["function applyDesign", "function currentSlide", "function showMeta"] {
+            assert!(
+                !VIEWER_PAGE.contains(gone),
+                "{gone} is back: the page is drawing slides again"
+            );
+        }
+    }
+
+    /// What Cantara rendered is what a viewer is served.
+    ///
+    /// The whole point of the change: the page no longer decides what a slide
+    /// looks like, so a rendering that did not reach the viewer would leave
+    /// them with nothing at all.
+    #[test]
+    fn the_rendering_reaches_the_viewer() {
+        let mut server = serving("");
+        server.publish(
+            StreamState::waiting(1)
+                .with_html("<div class=\"presentation\">Amazing grace</div>".to_string()),
+        );
+
+        let body = client()
+            .get(at(&server, "/state"))
+            .send()
+            .expect("answers")
+            .text()
+            .expect("a body");
+
+        assert!(
+            body.contains("Amazing grace"),
+            "the rendering did not reach the viewer: {body}"
+        );
+    }
+
+    /// Writes the page a viewer is served, with a real rendering in it, so it
+    /// can be opened in a browser and looked at.
+    ///
+    /// Ignored: it produces a file rather than asserting anything, and it is
+    /// how "does the stream look like the projection" is actually checked —
+    /// which is a question no assertion answers.
+    #[test]
+    #[ignore = "diagnostic output, not an assertion"]
+    fn dump_the_served_page() {
+        use crate::components::stream_render;
+
+        let slides = crate::logic::presentation::slides_from_song_content(
+            "#title: Amazing Grace\n\nAmazing grace how sweet the sound\nThat saved a wretch like me\n\n---\n\nI once was lost but now am found\nWas blind but now I see\n",
+            "Amazing Grace.song",
+            &cantara_songlib::slides::SlideSettings::default(),
+            "Amazing Grace",
+            &[],
+        )
+        .expect("the song builds into slides");
+        let chapter = crate::logic::states::SlideChapter::new(
+            slides,
+            crate::logic::sourcefiles::SourceFile {
+                name: "Amazing Grace".to_string(),
+                path: std::path::PathBuf::from("Amazing Grace.song"),
+                file_type: crate::logic::sourcefiles::SourceFileType::Song,
+                md5_hash: None,
+                relative_path: None,
+            },
+            None,
+            None,
+        );
+        let mut running = crate::logic::states::RunningPresentation::new(vec![chapter]);
+        running.jump_to(0, 1);
+
+        let html = stream_render::for_network(&stream_render::render_presentation(
+            &running,
+            Some(running.get_current_stream_design()),
+        ));
+
+        // The stylesheets the page carries, around the rendering and nothing
+        // else. The page's own script is left out on purpose: without a server
+        // to talk to it reports the connection lost and clears the stage,
+        // which says nothing about how a slide looks.
+        let page = format!(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
+             <style>html,body{{margin:0;height:100%;background:#000;}}</style>\
+             <style>{PRESENTATION_CSS}</style><style>{CONSOLE_CSS}</style>\
+             <style>{MONITOR_CSS}</style></head>\
+             <body><div style=\"position:relative;width:100vw;height:100vh;\">{html}</div></body></html>"
+        );
+
+        let out = std::path::Path::new("target").join("served_page.html");
+        std::fs::write(&out, page).expect("the page is writable");
+        println!("wrote {}", out.display());
     }
 
     /// Every path this router claims is one a view cannot be given.

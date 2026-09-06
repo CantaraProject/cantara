@@ -9,8 +9,15 @@ editor ("Darstellungsart"), a view is added on the selection screen and pointed
 at that design and a screen, and the window it opens draws the layout with its
 widgets.
 
-Not done: the network side (stage 3b, and 3b′ before it), enabling a view
-*during* a running service, `MonitorLayout::Custom`, and WebAssembly widgets.
+The network stream now draws with those same components too — see
+[One rendering, not two](#one-rendering-not-two). A phone is served markup made
+by the projector's own components, so what the room sees and what a pew sees
+cannot drift apart by one of them learning about a feature and the other not.
+
+Not done: several network views at different paths (stage 3b, and 3b′ before
+it), enabling a view *during* a running service, the speaker layout's
+"next slide to the right" and its proportional scaling, `MonitorLayout::Custom`,
+and WebAssembly widgets.
 
 Cantara today can put a service onto exactly two surfaces, and both of them are
 aimed at the congregation: the projection, and — since [0002](0002-remote-control.md)
@@ -767,6 +774,144 @@ Decision 3 also wants views enabled and disabled *during* a running service.
 The switch exists, but `enabled` is read once when the presentation starts, so
 a view turned on mid-service does not open until the next one. That is the
 remaining half of stage 3a.
+
+## One rendering, not two
+
+Found by using the feature: a monitor design set on the stream view reached a
+phone as a plain wall of text. The layout and the widgets were not missing from
+the data — the page serving viewers had simply never heard of such things.
+
+Cantara drew a slide **twice**. The window drew it with the components in
+`presentation_components`; `assets/stream_viewer.html` drew it again, in ~800
+lines of JavaScript, from a description that `stream/protocol.rs` built for it.
+A second renderer only ever knows the features the first had when it was
+written, which is a duplication that cannot be kept in step by discipline.
+
+So the page stops rendering. What it is given is HTML produced by the same
+components, through `dioxus-ssr` —
+[stream_render.rs](../../src/components/stream_render.rs). A feature added to a
+slide, a design or a monitor layout reaches the network by existing.
+
+### Why SSR and not a liveview session per viewer
+
+The remote presenter console solves the same problem with `dioxus-liveview`:
+the component runs on the server and the browser is sent DOM patches. That is
+the obvious precedent, and it was rejected here for one reason — **scale**.
+
+A console is one operator. A stream is the congregation. Liveview means a
+server-side `VirtualDom` and a websocket *per viewer*; a hundred phones is a
+hundred `VirtualDom`s in the helper process, on a church laptop that is also
+driving a projector. The stream was built as a static page precisely to fan one
+rendering out to many readers, and that property is worth keeping.
+
+Server-side rendering keeps both: **one** renderer, and **one** render per
+change rather than per viewer.
+
+### Why in Cantara and not in the helper
+
+The obvious place to render is the helper, next to the socket. It is the wrong
+place, and both reasons come down to the helper deliberately knowing nothing:
+
+* **Pictures.** A background and a picture slide are inlined as data URLs out
+  of `logic::images`, whose cache is filled from the library on disk. The
+  helper has neither. Cantara has both, warm, because it is already showing the
+  same slide on the projector.
+* **Settings.** Which design a view uses is a setting, and the helper has none
+  — so that a service cannot be changed by whatever reaches the socket.
+
+### What this turned up
+
+`PresentationRendererComponent` gated its slide behind a signal that only
+became true in `onmounted`. In a browser that is a trick to replay the entry
+animation; in any rendering without a mount event it means **there is no slide
+at all** — the first SSR of an audience design produced a background and
+nothing else. It now starts shown, and the animation is unaffected because a
+CSS animation plays when the element is inserted either way. Content that
+exists only after a browser event is content no server-side rendering can
+produce.
+
+### What is done, and what is left
+
+Done and tested (nine tests in `stream_render`): the rendering entry point,
+audience designs, monitor layouts, widgets, corner placement, stability of the
+output across identical renders, and that moving the presentation changes it.
+
+Also done: `for_network`, which rewrites the addresses in a rendering so they
+mean something on another device. A rendering is made for the machine that made
+it, and `/cantara-video/…` is answered by the asset handler *inside* Cantara's
+web view. On the WebKitGTK platforms it is worse — a video's `src` is an
+absolute `http://127.0.0.1:…` URL, and loopback on a phone is the phone. Both
+become `video/…` on the stream's own origin. Pictures need nothing: they are
+inlined as data URLs and carry their own bytes. Six tests, including the two
+failure modes above and the rule that the encoded path is what the server looks
+the file up by and must come through untouched.
+
+### The switch-over
+
+Done. `network_host::publish` renders the slide once per change and sends it
+with the presentation; the helper passes it into `StreamState::html`; the page
+puts it on the stage. Which design is not a question the caller has to answer —
+`get_current_stream_design` is what `StreamState::of` already read, so the
+rendering and the rest of the payload cannot disagree about what the phones are
+being shown.
+
+Deleted from `stream_viewer.html`: `applyDesign`, `currentSlide`, `showMeta`,
+`notationBlock`, `dressed`, `spaced`, the `#backdrop` element and the `#meta`
+element — every piece that existed to turn a payload into a slide. A test
+asserts three of those function names never come back, because a second
+renderer is easy to reintroduce a function at a time and each addition looks
+reasonable on its own.
+
+Two details the switch turned up:
+
+* **Redrawing on every update would restart the video.** Updates arrive several
+  times a second while a video plays. The stage is now rebuilt only when the
+  *markup* changes — a moving video does not change it — and where the new
+  markup names the file already playing, the element already playing is put
+  back in its place rather than a fresh one being downloaded.
+* **Notation was not in the markup at all.** `AbcNotationRenderer` emitted an
+  empty box and engraved it from an `onmounted` handler, so a rendering made
+  without a mount event carried no notation anywhere. The source now travels in
+  `data-abc` and `data-vocal-font`, and the page engraves from those with the
+  same library. The same lesson as `presentation_is_visible`: markup that
+  describes itself is markup any renderer can finish.
+
+### Verified
+
+The served page was rendered to a file and opened in a browser. The stage
+carries the design's own values, inline, exactly as the window does: black
+background, white text, `place-items: center stretch`, `text-align: center`,
+main content at 32pt (42.67px) and the spoiler at the design's ratio (29.87px),
+with the fade class applied. Four stylesheets load. Content and styling match
+the projection.
+
+Also tested against a running server: the rendering reaches `/state`, and the
+page carries a rule from each of the three component stylesheets — dropping one
+would leave a monitor design's slide list unstyled and nothing else would
+notice.
+
+### Two things server-side rendering cannot finish by itself
+
+Worth stating plainly, because "the browser looks exactly like the local
+screen, across every source" is not something SSR delivers on its own:
+
+* **Video.** SSR emits the `<video>` element and `for_network` points it at the
+  right file, but *where the video is* is a running value. The existing
+  `StreamVideoState` — playing, position, duration, sent with every update — is
+  the right mechanism and stays; the page keeps the small piece of script that
+  pulls its element onto that position. This is synchronisation, not rendering,
+  and it does not belong in the markup.
+* **Notation and PDF pages.** Both are drawn *by the browser* locally: `abcjs`
+  engraves a staff from its source, and pdf.js renders a page to a canvas. SSR
+  emits the container and no more. The stream already solves the PDF case by
+  sending the page as a picture (`media`), which is the same answer this should
+  keep; notation needs `abcjs` to run on the delivered markup, exactly as it
+  does in the window.
+
+So the honest shape of the finished thing is: **one renderer for everything
+that is layout and text, and a small amount of script for the three things that
+are inherently client-side** — video position, staves, and PDF pages. That is
+not a second renderer; it is the same markup being finished where it is shown.
 
 ## Still open
 

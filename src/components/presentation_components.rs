@@ -1446,6 +1446,17 @@ pub(crate) fn AbcNotationRenderer(
             id: "{container_id}",
             class: "abc-notation-container",
             style: "{notation_style}",
+            // The staff's own source, in the markup rather than only in the
+            // handler below.
+            //
+            // The handler is what engraves it *here*, in a web view that
+            // mounts elements. A rendering made without one — the network
+            // stream, which renders these components to HTML — has no mount
+            // event and would otherwise carry an empty box with the notation
+            // nowhere in it. With these the markup says what it is, and
+            // whoever displays it can engrave it with the same library.
+            "data-abc": "{abc_notation}",
+            "data-vocal-font": "{vocal_font}",
             onmounted: move |_| {
                 // Every value is passed through serde so that quotes and
                 // newlines in the notation cannot break out of the script.

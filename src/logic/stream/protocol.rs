@@ -65,6 +65,18 @@ pub struct StreamState {
     /// a stream of frames long before it drops a file it is playing itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<StreamVideoState>,
+
+    /// The slide as HTML, drawn by Cantara's own components.
+    ///
+    /// This is what a viewer is *shown*. It comes out of the same components
+    /// the projector draws with — see [`crate::components::stream_render`] —
+    /// so that what a phone sees and what the room sees cannot drift apart by
+    /// one of them learning about a feature and the other not.
+    ///
+    /// Empty when there is nothing to show, and when the rendering could not be
+    /// made. A page given nothing draws nothing rather than guessing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub html: String,
 }
 
 /// Where the video on the current slide stands.
@@ -306,6 +318,16 @@ impl StreamState {
         }
     }
 
+    /// The same state, carrying the rendering Cantara made of it.
+    ///
+    /// Kept apart from [`of`](Self::of) because this process cannot render:
+    /// the markup arrives over the socket from Cantara, which has the library,
+    /// the picture cache and the settings that decide the design.
+    pub fn with_html(mut self, html: String) -> Self {
+        self.html = html;
+        self
+    }
+
     /// What to tell a viewer about a presentation that is running.
     ///
     /// Built throughout from what the *stream* is set up to show, which is the
@@ -336,6 +358,9 @@ impl StreamState {
         StreamState {
             revision,
             running: true,
+            // Filled in by `with_html` from what Cantara rendered: this
+            // process has nothing to render with.
+            html: String::new(),
             design,
             chapters,
             position,

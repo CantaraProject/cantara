@@ -211,7 +211,16 @@ pub enum ToChild {
     /// Everything a viewer is shown is worked out from this, here — see
     /// [`crate::logic::stream::protocol::StreamState::of`]. The console gets
     /// the same value, because it is the same presentation.
-    Presentation(Box<Option<RunningPresentation>>),
+    Presentation {
+        presentation: Box<Option<RunningPresentation>>,
+        /// The same presentation as HTML, drawn by Cantara's own components.
+        ///
+        /// This process cannot render it: the pictures come from a cache
+        /// filled off the library on disk, and which design a view uses is a
+        /// setting — and the helper has neither, deliberately. See
+        /// [`crate::components::stream_render`].
+        rendered: Option<String>,
+    },
 
     /// A picture a slide refers to, rendered into bytes.
     ///
@@ -492,6 +501,9 @@ fn serve(configuration: Configuration, socket: TcpStream) -> Result<(), String> 
 #[derive(Default)]
 struct Shown {
     presentation: Option<RunningPresentation>,
+    /// The presentation as HTML, as Cantara last rendered it. Passed straight
+    /// through into what viewers are served — see [`ToChild::Presentation`].
+    rendered: Option<String>,
     /// Where the video on the current slide has got to. Sent several times a
     /// second while one is playing and not at all otherwise.
     video: Option<(f64, f64, bool)>,
@@ -500,8 +512,12 @@ struct Shown {
 impl Shown {
     fn apply(&mut self, message: ToChild, server: &mut StreamServer, console: &Arc<Shared>) {
         match message {
-            ToChild::Presentation(presentation) => {
+            ToChild::Presentation {
+                presentation,
+                rendered,
+            } => {
                 self.presentation = *presentation;
+                self.rendered = rendered;
                 // The console works on the presentation itself; the viewers
                 // are shown what is made of it below.
                 remote_console::publish(self.presentation.clone());
@@ -559,7 +575,9 @@ impl Shown {
     /// Tells the viewers where things stand.
     fn publish(&self, server: &mut StreamServer) {
         let state = match &self.presentation {
-            Some(running) => StreamState::of(running, 0).with_live_video(self.video),
+            Some(running) => StreamState::of(running, 0)
+                .with_live_video(self.video)
+                .with_html(self.rendered.clone().unwrap_or_default()),
             // Between services. The address stays open and says so.
             None => StreamState::waiting(0),
         };
