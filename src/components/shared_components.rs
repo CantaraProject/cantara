@@ -372,9 +372,15 @@ pub fn PresentationViewer(
                      height: {native_h}px; transform: scale({scale}); \
                      transform-origin: top left;"
                 ),
-            PresentationRendererComponent {
+            // Drawn the way the design says, which for a monitor design is
+            // its layout rather than a single slide. The card in the settings
+            // used to show one slide for every design, including the ones
+            // that do not describe one — see [`DesignedPresentation`].
+            crate::components::monitor_view::DesignedPresentation {
                 running_presentation: presentation_signal,
                 role: PresentationRole::Follower,
+                // Inside a box that is scaled down, not filling a window.
+                contained: true,
             }
             if let Some(title) = title {
                 div {

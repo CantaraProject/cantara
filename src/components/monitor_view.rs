@@ -36,6 +36,58 @@ const MONITOR_VIEW_CSS: Asset = asset!("/assets/monitor_view.css");
 /// closely, on a machine that is also driving a projection.
 const WIDGET_TICK: std::time::Duration = std::time::Duration::from_millis(1000);
 
+/// A presentation, drawn the way its design says it should be.
+///
+/// The one place that decides between the audience renderer and a monitor
+/// view. That decision was made in three places and only two of them knew
+/// about monitor designs: the presentation window did, the design editor's
+/// live preview did after it was fixed, and the cards in the settings did not
+/// — so a monitor design sat in the list looking like a single slide, which is
+/// the one thing it is not.
+///
+/// Everything that shows a presentation goes through here now, so a fourth
+/// place that shows one cannot get it wrong by being written later.
+#[component]
+pub fn DesignedPresentation(
+    running_presentation: Signal<RunningPresentation>,
+    /// The design that decides how this is drawn.
+    ///
+    /// `None` asks the presentation itself — the design the chapter that is up
+    /// carries. That is what a card in the settings and a preview of an
+    /// element want. A surface that is shown in a design of its *own* — a view
+    /// with a design set, the editor previewing the design being edited —
+    /// names it here instead.
+    #[props(default)]
+    design: Option<PresentationDesign>,
+    /// What an audience rendering is for. Means nothing for a monitor view,
+    /// which is never the window the audience looks at.
+    #[props(default)]
+    role: crate::components::presentation_components::PresentationRole,
+    /// Whether this is drawn inside a box rather than filling a window.
+    #[props(default)]
+    contained: bool,
+) -> Element {
+    let design = design
+        .unwrap_or_else(|| running_presentation.read().get_current_presentation_design());
+
+    match design.presentation_design_settings.monitor() {
+        Some(monitor) => rsx! {
+            MonitorViewComponent {
+                running_presentation,
+                monitor_design: monitor.clone(),
+                slide_design: design.clone(),
+                contained,
+            }
+        },
+        None => rsx! {
+            crate::components::presentation_components::PresentationRendererComponent {
+                running_presentation,
+                role,
+            }
+        },
+    }
+}
+
 /// A whole monitor view: the layout, and the widgets over it.
 #[component]
 pub fn MonitorViewComponent(

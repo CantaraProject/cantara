@@ -1368,18 +1368,13 @@ fn PresentationDesignPreview(
                             // a preview drawing one slide was showing
                             // something the design does not do — the layout,
                             // which is the whole point of it, was invisible.
-                            if let Some(monitor) = design().presentation_design_settings.monitor() {
-                                crate::components::monitor_view::MonitorViewComponent {
-                                    running_presentation: preview_presentation,
-                                    monitor_design: monitor.clone(),
-                                    slide_design: design(),
-                                    contained: true,
-                                }
-                            } else {
-                                StaticSlideRendererComponent {
-                                    slide: slides.read()[current].clone(),
-                                    presentation_design: design(),
-                                }
+                            // The choice is made in one place for every
+                            // preview: see [`DesignedPresentation`].
+                            crate::components::monitor_view::DesignedPresentation {
+                                running_presentation: preview_presentation,
+                                design: design(),
+                                role: crate::components::presentation_components::PresentationRole::Follower,
+                                contained: true,
                             }
                         }
                     }

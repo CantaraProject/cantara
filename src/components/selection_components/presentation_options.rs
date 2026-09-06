@@ -850,6 +850,25 @@ fn ViewRow(index: usize, view: View, is_reference: bool) -> Element {
                 p { class: "view-row-note",
                     {t!("selection.presentation_options.views.network_note").to_string()}
                 }
+
+                // A monitor design cannot reach the network yet, and saying so
+                // is better than serving a plain slide and leaving the
+                // operator to wonder why the layout they set up is missing.
+                //
+                // The stream is not drawn by these components at all: it is a
+                // self-contained page (`assets/stream_viewer.html`) fed a
+                // `StreamState`, which describes an audience design and knows
+                // nothing about layouts or widgets. Teaching it is stage 3b of
+                // docs/specs/0003-add-monitor-view.md.
+                if settings
+                    .read()
+                    .design_of_view(&view)
+                    .is_some_and(|design| design.presentation_design_settings.monitor().is_some())
+                {
+                    p { class: "view-row-warning",
+                        {t!("selection.presentation_options.views.network_monitor_note").to_string()}
+                    }
+                }
             }
 
             // The same note the stream's own panel used to show, now shown for

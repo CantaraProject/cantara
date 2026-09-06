@@ -187,6 +187,9 @@ selection:
       network_note:
         en: "Switch the stream on below to show this view on the network."
         de: "Die Übertragung unten einschalten, um diese Darstellung im Netzwerk anzuzeigen."
+      network_monitor_note:
+        en: "A monitor design cannot be shown over the network yet: the stream sends the slides themselves, without a layout or widgets. Viewers see the plain presentation."
+        de: "Ein Monitordesign kann noch nicht über das Netzwerk angezeigt werden: Die Übertragung sendet die Folien selbst, ohne Anordnung und Widgets. Zuschauer sehen die einfache Präsentation."
     stream_view:
       headline:
         en: Network stream

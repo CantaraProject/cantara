@@ -2312,3 +2312,11 @@ div.inline-div {
     color: var(--pico-muted-color);
 }
 
+
+/* Something the operator should know before a service, not a failure: a
+ * setting that is accepted but cannot be carried out yet. */
+.view-row-warning {
+    margin: 0.35rem 0 0 0;
+    font-size: 0.85em;
+    color: var(--pico-del-color, #b3261e);
+}
