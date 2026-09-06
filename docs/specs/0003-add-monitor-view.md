@@ -1007,6 +1007,30 @@ An engine that cannot divide two lengths drops the declaration and draws the
 slide unscaled — visibly wrong rather than silently squeezed, which is the
 better of the two failures.
 
+## What the Android build said
+
+The mobile build broke on `stream_render`, and the error was worth more than
+the fix. `path_of_video_url` is `#[cfg(feature = "desktop")]`; the renderer
+that called it was `#[cfg(not(target_arch = "wasm32"))]`, so on a phone it was
+compiled without the thing it needed.
+
+The real fault was underneath: **the whole network side is desktop-only and the
+module gating did not say so.** `network_host` and `network_server` are gated
+on `desktop`, but `logic::stream` — the protocol *and* the server — was gated
+on "not the browser", so a phone build carried a server it can never start and
+a protocol nothing there can speak. Every item in it warned as unused, which is
+the compiler saying exactly that.
+
+Gated with the thing they exist for, the warnings go and the binary loses code
+it could not use: `logic::stream`, `components::stream_render`, the publishing
+effect in `main` with its two helpers, and the `Range`-header parsing that only
+a video server needs. Verified across all four configurations — desktop tests
+and clippy, `--features mobile`, and the wasm target.
+
+The lesson is the same shape as the one about markup: **gate a module on what
+it is for, not on what it is not.** `not(wasm32)` is not a statement about
+anything; `feature = "desktop"` is.
+
 ## Still open
 
 * Whether a pinned view should be able to *follow with an offset* ("always the

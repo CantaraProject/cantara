@@ -349,7 +349,11 @@ fn App() -> Element {
     //
     // Publishing is cheap and does nothing at all when streaming is off, so
     // this may follow every change without asking first.
-    #[cfg(not(target_arch = "wasm32"))]
+    //
+    // Only where there *is* a network side: `network_host` is desktop-only, so
+    // on a phone this whole block was a context provider nobody consumes and
+    // an effect that subscribed to two signals in order to do nothing.
+    #[cfg(feature = "desktop")]
     {
         // Counts up when streaming is switched on or off. Turning the switch is
         // not a change to the presentation, so without something for the
@@ -357,6 +361,7 @@ fn App() -> Element {
         // service would publish nothing until the next slide change.
         let stream_generation: Signal<u64> = use_context_provider(|| Signal::new(0));
         let running_presentations: Signal<Vec<RunningPresentation>> = use_context();
+
         use_effect(move || {
             use logic::stream::protocol::StreamState;
 
@@ -634,7 +639,7 @@ fn App() -> Element {
 /// A PDF page has to be rendered first, which happens in this window's own
 /// page and needs nothing to be on screen — the same route the PowerPoint
 /// export takes. See [`logic::pdf::page_image`].
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "desktop")]
 async fn render_for_stream(source: &str) -> Option<(Vec<u8>, &'static str)> {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
@@ -662,5 +667,5 @@ async fn render_for_stream(source: &str) -> Option<(Vec<u8>, &'static str)> {
 /// A phone is not a projector: a full-resolution page would be several
 /// megabytes over a hall's wi-fi for no visible gain on a screen a few inches
 /// across.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "desktop")]
 const STREAM_PICTURE_WIDTH: u32 = 1280;

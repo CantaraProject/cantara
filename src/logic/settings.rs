@@ -1156,6 +1156,10 @@ impl Settings {
     /// `None` only when there are no views at all, which
     /// [`ensure_views`](Self::ensure_views) makes sure does not happen to a
     /// loaded configuration.
+    #[cfg_attr(
+        not(any(test, feature = "desktop")),
+        allow(dead_code, reason = "only a desktop build opens a window per view")
+    )]
     pub fn reference_view(&self) -> Option<&View> {
         self.views
             .get(self.reference_view_index)
