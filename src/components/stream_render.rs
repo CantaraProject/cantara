@@ -105,13 +105,26 @@ pub fn render_presentation(
 ///   custom scheme (see [`crate::logic::video::video_source_url`]). *Loopback*
 ///   on a phone is the phone.
 ///
-/// Both become `video/…` on the stream's own origin, which
-/// [`crate::logic::stream::server`] answers from the files of the running
-/// service. The path after the handler is left exactly as it is: it is the
-/// encoded file path, and it is what the server looks the file up by.
+/// Both become `video/…` on the stream's own origin.
 ///
-/// Pictures need no rewriting — they are inlined as data URLs and carry their
-/// own bytes.
+/// The name after it is **not** the path. The server holds the videos of the
+/// running service under [`media_id`](crate::logic::stream::protocol::media_id)
+/// — an MD5 of the source — because that is how every other piece of media it
+/// serves is addressed, and it is registered under that name before a viewer
+/// ever asks. A rewrite that kept the encoded path produced an address nothing
+/// answered: the element was there, the file was not, and a viewer saw the
+/// design's background and an empty rectangle over it.
+///
+/// A **PDF page** is the other half of the same problem. It is drawn by pdf.js
+/// into a canvas, which no rendering without a browser can fill, so the markup
+/// arrived as an empty box. The page travels as a picture instead — Cantara
+/// renders it and sends the bytes, exactly as it always has — and the canvas
+/// becomes the `<img>` that asks for it. The canvas says which page it depicts
+/// in `data-pdf` and `data-page`, so that this rewrite needs to know nothing
+/// about PDFs beyond the name the picture is filed under.
+///
+/// Ordinary pictures need no rewriting at all: they are inlined as data URLs
+/// and carry their own bytes.
 #[cfg_attr(
     not(test),
     allow(
@@ -130,8 +143,11 @@ pub fn for_network(html: &str) -> String {
     // else in the slide still arrives.
     static PATTERN: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
     let pattern = PATTERN.get_or_init(|| {
+        // The whole address, the encoded path included, so that the
+        // replacement is the complete new one rather than a prefix with the
+        // old tail left dangling after it.
         match regex::Regex::new(&format!(
-            r#"(?:https?://[^"'\s]*?)?/{}/"#,
+            r#"(?:https?://[^"'\s]*?)?/{}/([^"'\s]*)"#,
             regex::escape(crate::logic::video::VIDEO_HANDLER)
         )) {
             Ok(pattern) => Some(pattern),
@@ -142,10 +158,68 @@ pub fn for_network(html: &str) -> String {
         }
     });
 
-    match pattern {
-        Some(pattern) => pattern.replace_all(html, "video/").into_owned(),
-        None => html.to_string(),
-    }
+    let Some(pattern) = pattern else {
+        return html.to_string();
+    };
+
+    // The video's own address, under the name the server files it by.
+    let rewritten = pattern.replace_all(html, |captures: &regex::Captures| {
+        let encoded = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
+
+        match crate::logic::video::path_of_video_url(&format!(
+            "/{}/{encoded}",
+            crate::logic::video::VIDEO_HANDLER
+        )) {
+            Some(path) => format!("video/{}", crate::logic::stream::protocol::media_id(&path)),
+            // An address that cannot be read back is left as the path it was.
+            // It will not be answered, but nothing else in the slide is
+            // disturbed by it.
+            None => format!("video/{encoded}"),
+        }
+    });
+
+    pdf_pages_as_pictures(&rewritten)
+}
+
+/// Turns the canvas a PDF page is drawn into on this machine into the picture
+/// a viewer is served.
+///
+/// pdf.js draws the page into a `<canvas>` in the window, which is exactly
+/// right there and useless anywhere else: a rendering made without a browser
+/// carries an empty box. Cantara renders the page and sends it as a picture
+/// regardless — that is how the stream has always shown PDFs — so what the
+/// markup needs is the address of that picture, and the canvas already says
+/// which page it is.
+fn pdf_pages_as_pictures(html: &str) -> String {
+    static PATTERN: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        match regex::Regex::new(
+            r#"<canvas[^>]*?data-pdf="([^"]*)"[^>]*?data-page="([^"]*)"[^>]*?></canvas>"#,
+        ) {
+            Ok(pattern) => Some(pattern),
+            Err(error) => {
+                log::error!("the pdf page pattern did not compile: {error}");
+                None
+            }
+        }
+    });
+
+    let Some(pattern) = pattern else {
+        return html.to_string();
+    };
+
+    pattern
+        .replace_all(html, |captures: &regex::Captures| {
+            let path = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let page = captures.get(2).map(|m| m.as_str()).unwrap_or_default();
+            // The same name `media_sources` files the rendered page under, so
+            // that the address and the bytes cannot disagree.
+            let id = crate::logic::stream::protocol::media_id(&format!("{path}#page={page}"));
+            format!(
+                r#"<img class="pdf-page" alt="" style="display:block;max-width:100%;max-height:100%;" src="media/{id}"/>"#
+            )
+        })
+        .into_owned()
 }
 
 /// The root of a rendering that has no window.
@@ -160,6 +234,23 @@ fn StreamRoot(
     presentation: RunningPresentation,
     design: Option<PresentationDesign>,
 ) -> Element {
+    // A document, so that the components which ask for one find it.
+    //
+    // `document::Link` and `document::Script` — which every slide renderer
+    // uses to bring in its stylesheet and the PDF viewer — look one up in the
+    // context. Without one they log
+    // "Unable to find a document in the renderer. Using the default no-op
+    // document." at error level, and this renders on every slide change of
+    // every service. The fallback they then use is exactly this one; the only
+    // difference is that finding it is not an error.
+    //
+    // A no-op is the right document here in any case. There is no page to add
+    // a stylesheet to: the markup is a fragment, and whoever serves it says
+    // how it is dressed — see [`crate::logic::stream::server`].
+    use_context_provider(|| {
+        std::rc::Rc::new(dioxus::document::NoOpDocument) as std::rc::Rc<dyn dioxus::document::Document>
+    });
+
     let running_presentation = use_signal(|| presentation.clone());
 
     rsx! {
@@ -418,11 +509,14 @@ mod tests {
     #[test]
     fn a_videos_address_is_rewritten_for_the_network() {
         let handler = crate::logic::video::VIDEO_HANDLER;
-        let html = format!(r#"<video src="/{handler}/Der%20Film.mp4"></video>"#);
+        let html = format!(r#"<video src="/{handler}/%2FDer%20Film.mp4"></video>"#);
 
         assert_eq!(
             for_network(&html),
-            r#"<video src="video/Der%20Film.mp4"></video>"#
+            format!(
+                r#"<video src="video/{}"></video>"#,
+                crate::logic::stream::protocol::media_id("/Der Film.mp4")
+            )
         );
     }
 
@@ -432,11 +526,15 @@ mod tests {
     #[test]
     fn an_absolute_loopback_address_loses_its_origin_too() {
         let handler = crate::logic::video::VIDEO_HANDLER;
-        let html = format!(r#"<video src="http://127.0.0.1:8431/{handler}/clip.mp4"></video>"#);
+        let html =
+            format!(r#"<video src="http://127.0.0.1:8431/{handler}/%2Fsrv%2Fclip.mp4"></video>"#);
 
         assert_eq!(
             for_network(&html),
-            r#"<video src="video/clip.mp4"></video>"#
+            format!(
+                r#"<video src="video/{}"></video>"#,
+                crate::logic::stream::protocol::media_id("/srv/clip.mp4")
+            )
         );
     }
 
@@ -446,30 +544,107 @@ mod tests {
     fn every_address_in_a_rendering_is_rewritten() {
         let handler = crate::logic::video::VIDEO_HANDLER;
         let html = format!(
-            r#"<video src="/{handler}/one.mp4"></video><video src="/{handler}/two.mp4"></video>"#
+            r#"<video src="/{handler}/%2Fone.mp4"></video><video src="/{handler}/%2Ftwo.mp4"></video>"#
         );
 
         let rewritten = for_network(&html);
 
-        assert!(rewritten.contains(r#"src="video/one.mp4""#));
-        assert!(rewritten.contains(r#"src="video/two.mp4""#));
+        for path in ["/one.mp4", "/two.mp4"] {
+            let id = crate::logic::stream::protocol::media_id(path);
+            assert!(
+                rewritten.contains(&format!(r#"src="video/{id}""#)),
+                "{path} is not addressed by the name the server files it under: {rewritten}"
+            );
+        }
         assert!(
             !rewritten.contains(handler),
             "an address was left pointing at Cantara's own handler: {rewritten}"
         );
     }
 
-    /// The encoded path after the handler is what the server looks the file up
-    /// by, so it has to come through untouched — including the characters that
-    /// made it need encoding in the first place.
+    /// A path is decoded before it is hashed, so that the name matches the one
+    /// the server registered — which it built from the path itself, not from
+    /// the encoded form.
+    ///
+    /// This is the bug that made a video show as an empty rectangle over the
+    /// design's background: the element was there and nothing answered its
+    /// address.
     #[test]
-    fn the_encoded_path_is_left_exactly_as_it_is() {
+    fn the_address_is_the_name_the_server_files_the_video_under() {
         let handler = crate::logic::video::VIDEO_HANDLER;
-        let html = format!(r#"<video src="/{handler}/Ordner%2FDer%20Film%20%232.mp4"></video>"#);
+        let path = "/Ordner/Der Film #2.mp4";
+        let html = format!(r#"<video src="/{handler}/%2FOrdner%2FDer%20Film%20%232.mp4"></video>"#);
 
         assert!(
-            for_network(&html).contains("video/Ordner%2FDer%20Film%20%232.mp4"),
-            "the encoded path was altered"
+            for_network(&html)
+                .contains(&format!("video/{}", crate::logic::stream::protocol::media_id(path))),
+            "the address is not the id the server registered"
+        );
+    }
+
+    /// Rendering says nothing about a missing document.
+    ///
+    /// `document::Link` and `document::Script`, which every slide renderer
+    /// uses, look one up in the context and log at *error* level when there is
+    /// none. That is once per slide change of every service, in a log an
+    /// operator reads to find real problems.
+    #[test]
+    fn rendering_does_not_complain_about_a_missing_document() {
+        // The lookup is what logs, so provoking it is enough: if a document is
+        // found, nothing is written. This asserts the provider is in place by
+        // rendering something that asks for one and checking the render
+        // succeeds — the message itself goes to `tracing`, which a unit test
+        // cannot read without a subscriber.
+        //
+        // The guard against regression is the provider's presence; this keeps
+        // the reason for it written down beside the code.
+        let mut running = service();
+        running.jump_to(0, 0);
+
+        let html = render_presentation(&running, None);
+
+        assert!(
+            html.contains("presentation"),
+            "the rendering that asks for a document did not come out"
+        );
+    }
+
+    /// A PDF page is drawn by pdf.js into a canvas, which no rendering without
+    /// a browser can fill. The page travels as a picture instead, and the
+    /// canvas becomes the request for it.
+    #[test]
+    fn a_pdf_page_becomes_the_picture_the_server_serves() {
+        let html = r#"<canvas id="x" data-pdf="/srv/Handout.pdf" data-page="2" style="visibility: hidden;"></canvas>"#;
+
+        let rewritten = for_network(html);
+        let id = crate::logic::stream::protocol::media_id("/srv/Handout.pdf#page=2");
+
+        assert!(
+            rewritten.contains(&format!(r#"src="media/{id}""#)),
+            "the page was not addressed the way the server files it: {rewritten}"
+        );
+        assert!(
+            !rewritten.contains("<canvas"),
+            "an empty canvas was left in the rendering: {rewritten}"
+        );
+    }
+
+    /// The real Linux form, which carries a one-time token between the origin
+    /// and the handler. That token is this machine's; a phone must not be
+    /// asked for it.
+    #[test]
+    fn the_loopback_servers_token_is_stripped_along_with_the_origin() {
+        let handler = crate::logic::video::VIDEO_HANDLER;
+        let html = format!(
+            r#"<source src="http://127.0.0.1:37167/10e74dc715fd4b478bc27d1fe48a5ece/{handler}/%2Fsrv%2FClip.mp4" type="video/mp4"/>"#
+        );
+
+        assert_eq!(
+            for_network(&html),
+            format!(
+                r#"<source src="video/{}" type="video/mp4"/>"#,
+                crate::logic::stream::protocol::media_id("/srv/Clip.mp4")
+            )
         );
     }
 
@@ -490,6 +665,47 @@ mod tests {
         let html = r#"<div style="background-image:url(data:image/png;base64,iVBORw0KGgo=)"></div>"#;
 
         assert_eq!(for_network(html), html);
+    }
+
+    /// Diagnostic: prints what a video slide and a picture slide come out as.
+    ///
+    /// Ignored — it asserts nothing. It is how "the browser shows only the
+    /// background" was traced to its cause rather than guessed at.
+    #[test]
+    #[ignore = "diagnostic output, not an assertion"]
+    fn dump_media_slides() {
+        use cantara_songlib::slides::{Slide, SlideContent, VideoSlide};
+
+        let media = |content: SlideContent| {
+            let chapter = SlideChapter::new(
+                vec![Slide { slide_content: content, linked_file: None }],
+                SourceFile {
+                    name: "Clip".to_string(),
+                    path: std::path::PathBuf::from("Clip.mp4"),
+                    file_type: SourceFileType::Video,
+                    md5_hash: None,
+                    relative_path: None,
+                },
+                None,
+                None,
+            );
+            let mut running = RunningPresentation::new(vec![chapter]);
+            running.jump_to(0, 0);
+            render_presentation(&running, None)
+        };
+
+        println!(
+            "VIDEO:\n{}\n",
+            media(SlideContent::Video(VideoSlide {
+                video_path: "/srv/Clip.mp4".to_string(),
+                autostart: true,
+                looping: false,
+            }))
+        );
+        println!(
+            "PDF PAGE:\n{}\n",
+            media(Slide::new_pdf_page_slide("/srv/Handout.pdf".to_string(), 2).slide_content)
+        );
     }
 
     /// Moving the presentation changes the rendering. The obvious property,

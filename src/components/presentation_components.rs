@@ -2407,6 +2407,18 @@ pub(crate) fn PdfPageCanvas(
     rsx! {
         canvas {
             id: "{canvas_id}",
+            // Which page this is, in the markup rather than only in the effect
+            // above.
+            //
+            // The effect is what draws it *here*, with pdf.js, into a canvas.
+            // A rendering made without a browser — the network stream, which
+            // renders these components to HTML — can do neither, and carried
+            // an empty box: a viewer saw the design's background and nothing
+            // on it. With these the markup says which page it depicts, and
+            // whoever displays it can put the picture of that page in its
+            // place. See [`crate::components::stream_render`].
+            "data-pdf": "{pdf_path}",
+            "data-page": "{page_num}",
             // Not shown until a page has been drawn onto it, so an empty
             // canvas is never part of the picture.
             style: "display: block; max-width: 100%; max-height: 100%; visibility: hidden;",

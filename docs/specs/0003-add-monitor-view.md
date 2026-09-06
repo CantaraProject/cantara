@@ -876,6 +876,36 @@ Two details the switch turned up:
   same library. The same lesson as `presentation_is_visible`: markup that
   describes itself is markup any renderer can finish.
 
+### Three things that only showed up in a browser
+
+All three are the same shape: something the *window* supplies at runtime, which
+a rendering made without a window cannot.
+
+* **A video showed as an empty rectangle over the background.** The address was
+  rewritten to the encoded file path, but the server files the videos of a
+  running service under `media_id` — an MD5 of the source — because that is how
+  every other piece of media it serves is addressed. The element was there and
+  nothing answered it. `for_network` now decodes the path and hashes it, so the
+  address is the name the server registered.
+* **A PDF page showed nothing at all.** It is drawn by pdf.js into a canvas,
+  and a rendering without a browser carries an empty box. The page already
+  travels as a picture — Cantara renders it and sends the bytes, as it always
+  has — so the canvas says which page it depicts in `data-pdf`/`data-page` and
+  becomes the `<img>` that asks for it. The rewrite needs to know nothing about
+  PDFs beyond the name the picture is filed under.
+* **`Unable to find a document in the renderer`, at error level, on every
+  render.** `document::Link` and `document::Script` — which every slide
+  renderer uses — look one up in the context and log when there is none. The
+  SSR root now provides a `NoOpDocument`: the same fallback they were using,
+  except that finding it is not an error. A no-op is right here in any case,
+  since the markup is a fragment and whoever serves it says how it is dressed.
+
+The pattern is worth naming, because it has now caught four things — the mount
+gate on `presentation_is_visible`, the notation source, the PDF page, and the
+document. **Markup that depends on a browser event to become itself is markup
+no server-side rendering can produce.** Where the window fills something in
+after mounting, the value has to be in the markup as well.
+
 ### Verified
 
 The served page was rendered to a file and opened in a browser. The stage
