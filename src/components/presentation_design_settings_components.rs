@@ -10,7 +10,8 @@ use cantara_songlib::slides::{Slide, SlideSettings};
 use crate::logic::settings::{
     CssSize, DesignKind, HorizontalAlign, MonitorDesign, MonitorLayout, MonitorWidget,
     PresentationDesign, PresentationDesignSettings, PresentationDesignTemplate,
-    TopBottomLeftRight, VerticalAlign, WidgetKind, WidgetPlacement, use_settings,
+    SpeakerNextPosition, TopBottomLeftRight, VerticalAlign, WidgetKind, WidgetPlacement,
+    use_settings,
 };
 use crate::logic::sourcefiles::{ImageSourceFile, SourceFile};
 use dioxus::core_macro::{component, rsx};
@@ -328,6 +329,7 @@ fn MonitorDesignSettings(
                                 let layout = match event.value().as_str() {
                                     "speaker" => MonitorLayout::Speaker {
                                         next_slide_share: 0.25,
+                                        next_position: SpeakerNextPosition::default(),
                                     },
                                     _ => MonitorLayout::default(),
                                 };
@@ -375,7 +377,39 @@ fn MonitorDesignSettings(
                     },
                 }
             },
-            MonitorLayout::Speaker { next_slide_share } => rsx! {
+            MonitorLayout::Speaker { next_slide_share, next_position } => rsx! {
+                form {
+                    fieldset {
+                        label {
+                            {t!("settings.monitor_next_position").to_string()}
+                            select {
+                                value: next_position.value(),
+                                onchange: {
+                                    let design = design.clone();
+                                    move |event: Event<FormData>| {
+                                        onchange
+                                            .call(MonitorDesign {
+                                                layout: MonitorLayout::Speaker {
+                                                    next_slide_share,
+                                                    next_position: SpeakerNextPosition::from_value(
+                                                        &event.value(),
+                                                    ),
+                                                },
+                                                ..design.clone()
+                                            });
+                                    }
+                                },
+                                for position in SpeakerNextPosition::ALL {
+                                    option {
+                                        value: position.value(),
+                                        selected: position == next_position,
+                                        {t!(position.label_key()).to_string()}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 RangeInput {
                     label: t!("settings.monitor_next_slide_share").to_string(),
                     unit: "%".to_string(),
@@ -390,6 +424,7 @@ fn MonitorDesignSettings(
                                 .call(MonitorDesign {
                                     layout: MonitorLayout::Speaker {
                                         next_slide_share: value / 100.0,
+                                        next_position,
                                     },
                                     ..design.clone()
                                 });

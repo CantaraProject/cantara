@@ -1579,6 +1579,23 @@ mod tests {
         let mut running = crate::logic::states::RunningPresentation::new(vec![chapter, pdf]);
         running.jump_to(1, 0);
 
+        // Switch this to a monitor design to look at a layout instead.
+        let design = crate::logic::settings::PresentationDesign {
+            name: "Stage".to_string(),
+            description: String::new(),
+            presentation_design_settings:
+                crate::logic::settings::PresentationDesignSettings::Monitor(
+                    crate::logic::settings::MonitorDesign {
+                        layout: crate::logic::settings::MonitorLayout::Speaker {
+                            next_slide_share: 0.25,
+                            next_position: crate::logic::settings::SpeakerNextPosition::Right,
+                        },
+                        ..crate::logic::settings::MonitorDesign::default()
+                    },
+                ),
+        };
+        let _ = &design;
+
         let html = stream_render::for_network(&stream_render::render_presentation(
             &running,
             Some(running.get_current_stream_design()),

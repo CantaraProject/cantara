@@ -14,10 +14,13 @@ The network stream now draws with those same components too — see
 by the projector's own components, so what the room sees and what a pew sees
 cannot drift apart by one of them learning about a feature and the other not.
 
+The speaker layout can put the next slide **below or beside** the current one,
+and both are drawn at the presentation's own size and scaled to fit — see
+[Fitting a slide into a smaller box](#fitting-a-slide-into-a-smaller-box).
+
 Not done: several network views at different paths (stage 3b, and 3b′ before
-it), enabling a view *during* a running service, the speaker layout's
-"next slide to the right" and its proportional scaling, `MonitorLayout::Custom`,
-and WebAssembly widgets.
+it), enabling a view *during* a running service, `MonitorLayout::Custom`, and
+WebAssembly widgets.
 
 Cantara today can put a service onto exactly two surfaces, and both of them are
 aimed at the congregation: the projection, and — since [0002](0002-remote-control.md)
@@ -957,6 +960,52 @@ So the honest shape of the finished thing is: **one renderer for everything
 that is layout and text, and a small amount of script for the three things that
 are inherently client-side** — video position, staves, and PDF pages. That is
 not a second renderer; it is the same markup being finished where it is shown.
+
+## Fitting a slide into a smaller box
+
+A slide's type is set in **points**, which are absolute. Put the renderer into
+a smaller box and the words come out at their full size and overflow it: the box
+shrinks and the text does not. Every other preview in Cantara therefore draws
+the slide at its native size and shrinks the whole thing with a `transform`, and
+the speaker layout has to as well — its two slides are exactly that, a slide in
+a box that is not the size of a screen.
+
+What is different here is that the factor cannot be worked out in Rust. The
+other previews compute it from a width they know: a thumbnail is 400 pixels
+because something said so. This box is a share of a window whose size is the
+operator's business, and on the network a share of a phone nobody here can
+measure. Measuring it in the browser would work in a window and nowhere else —
+the stream is served as markup with no Dioxus behind it, so there is no
+`onmounted` to measure in. That is the same rule that has now caught five other
+things in this feature.
+
+So the browser works it out, from the box itself:
+
+```css
+.monitor-slide-frame { container-type: size; }
+.monitor-slide-stage {
+    width: var(--slide-width);          /* the presentation's own size */
+    transform: scale(min(
+        calc(100cqw / var(--slide-width)),
+        calc(100cqh / var(--slide-height))
+    ));
+}
+```
+
+`min()` of the two ratios is the one that fits in both directions, which is what
+keeps the proportions. The size to scale *from* comes from
+`RunningPresentation::layout_size` — the width the presentation window measured
+— so the slides break their lines where the wall breaks them rather than at some
+assumed 1920.
+
+Measured in a browser at 1280×720 with the next slide to the right and a quarter
+share: current 912×691, next 306×693, the stage declared 1920×1080 and scaled by
+0.475008. 1920 × 0.475008 = 912, which fills the width exactly; 1080 × 0.475008
+= 513, which fits inside 691. The narrower ratio won, as it should.
+
+An engine that cannot divide two lengths drops the declaration and draws the
+slide unscaled — visibly wrong rather than silently squeezed, which is the
+better of the two failures.
 
 ## Still open
 

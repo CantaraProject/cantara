@@ -277,8 +277,8 @@ fn StreamRoot(
 mod tests {
     use super::*;
     use crate::logic::settings::{
-        MonitorDesign, MonitorLayout, MonitorWidget, PresentationDesignSettings, WidgetKind,
-        WidgetPlacement,
+        MonitorDesign, MonitorLayout, MonitorWidget, PresentationDesignSettings,
+        SpeakerNextPosition, WidgetKind, WidgetPlacement,
     };
     use crate::logic::sourcefiles::{SourceFile, SourceFileType};
     use crate::logic::states::SlideChapter;
@@ -407,6 +407,7 @@ mod tests {
             Some(monitor_design(
                 MonitorLayout::Speaker {
                     next_slide_share: 0.25,
+                    next_position: SpeakerNextPosition::default(),
                 },
                 Vec::new(),
             )),
@@ -612,6 +613,151 @@ mod tests {
         assert!(
             html.contains("presentation"),
             "the rendering that asks for a document did not come out"
+        );
+    }
+
+    /// A monitor design set on the stream view reaches the network as a
+    /// monitor view.
+    ///
+    /// This is the whole reason the rendering moved out of the page. It went
+    /// through the chapter's `design_for_stream`, which is what
+    /// `StreamDefaults` fills from the stream view's design — so what a phone
+    /// is shown is what that view was set to, layout and widgets included.
+    #[test]
+    fn a_monitor_design_on_the_stream_view_streams_as_a_monitor_view() {
+        use cantara_songlib::slides::SlideSettings;
+
+        let slides = crate::logic::presentation::slides_from_song_content(
+            "#title: Amazing Grace\n\nAmazing grace how sweet the sound\n",
+            "Amazing Grace.song",
+            &SlideSettings::default(),
+            "Amazing Grace",
+            &[],
+        )
+        .expect("the song builds into slides");
+
+        let mut chapter = SlideChapter::new(
+            slides,
+            SourceFile {
+                name: "Amazing Grace".to_string(),
+                path: std::path::PathBuf::from("Amazing Grace.song"),
+                file_type: SourceFileType::Song,
+                md5_hash: None,
+                relative_path: None,
+            },
+            None,
+            None,
+        );
+        // What `StreamDefaults` puts on a chapter when the stream view names a
+        // design of its own.
+        chapter.stream_design_option = Some(monitor_design(
+            MonitorLayout::SlideList { context: None },
+            Vec::new(),
+        ));
+
+        let mut running = RunningPresentation::new(vec![chapter]);
+        running.jump_to(0, 0);
+
+        // Exactly what `network_host::publish` renders with.
+        let html = render_presentation(&running, Some(running.get_current_stream_design()));
+
+        assert!(
+            html.contains("monitor-view"),
+            "the stream did not get the monitor view its view was set to: {html}"
+        );
+    }
+
+    /// The speaker layout puts the next slide where the design says, and both
+    /// slides are drawn at the presentation's own size to be scaled by CSS.
+    ///
+    /// The scaling itself is the browser's — a slide's type is in points, so a
+    /// slide put straight into a smaller box overflows it, and the factor
+    /// depends on a box no renderer here can measure. What has to be in the
+    /// markup is the size to scale *from*.
+    #[test]
+    fn the_speaker_layout_carries_what_the_browser_needs_to_scale() {
+        let mut running = service();
+        running.jump_to(0, 0);
+
+        let beside = render_presentation(
+            &running,
+            Some(monitor_design(
+                MonitorLayout::Speaker {
+                    next_slide_share: 0.25,
+                    next_position: SpeakerNextPosition::Right,
+                },
+                Vec::new(),
+            )),
+        );
+
+        assert!(
+            beside.contains("flex-direction: row"),
+            "the next slide is not beside the current one: {beside}"
+        );
+        assert!(
+            beside.contains("--slide-width") && beside.contains("--slide-height"),
+            "the size to scale from is missing: {beside}"
+        );
+        assert!(
+            beside.contains("monitor-slide-stage"),
+            "the slide is not on a stage to be scaled: {beside}"
+        );
+
+        let below = render_presentation(
+            &running,
+            Some(monitor_design(
+                MonitorLayout::Speaker {
+                    next_slide_share: 0.25,
+                    next_position: SpeakerNextPosition::Below,
+                },
+                Vec::new(),
+            )),
+        );
+
+        assert!(
+            below.contains("flex-direction: column"),
+            "the next slide is not below the current one: {below}"
+        );
+    }
+
+    /// The share is of whichever direction the two are stacked in, so moving
+    /// the next slide from below to beside keeps its proportion rather than
+    /// silently becoming a share of the other axis.
+    #[test]
+    fn the_share_follows_the_direction_the_slides_are_stacked_in() {
+        let mut running = service();
+        running.jump_to(0, 0);
+
+        let beside = render_presentation(
+            &running,
+            Some(monitor_design(
+                MonitorLayout::Speaker {
+                    next_slide_share: 0.25,
+                    next_position: SpeakerNextPosition::Right,
+                },
+                Vec::new(),
+            )),
+        );
+
+        assert!(
+            beside.contains("width: 25%") && beside.contains("width: 75%"),
+            "beside, the share should be of the width: {beside}"
+        );
+
+        let below = render_presentation(
+            &running,
+            Some(monitor_design(
+                MonitorLayout::Speaker {
+                    next_slide_share: 0.25,
+                    next_position: SpeakerNextPosition::Below,
+                },
+                Vec::new(),
+            )),
+        );
+
+        assert!(
+            below.contains("height: 25%") && below.contains("height: 75%"),
+            "below, the share should be of the height: {below}"
         );
     }
 

@@ -156,10 +156,53 @@
     color: rgba(242, 242, 242, 0.5);
 }
 
-/* The slide renderer lays itself out at the presentation's size; inside these
- * boxes it is scaled to fit rather than allowed to overflow them. */
-.monitor-speaker-current > *,
-.monitor-speaker-next > * {
+/* A slide drawn at the presentation's own size and shrunk to fit its box.
+ *
+ * A slide's type is set in *points*, which are absolute: put the renderer in a
+ * small box and the words come out full size and overflow it. Every other
+ * preview in Cantara therefore draws the slide at its native size and shrinks
+ * the whole thing with a transform, and this has to as well.
+ *
+ * The others compute the factor in Rust from a width they know — a thumbnail
+ * is 400 pixels because something said so. This box has no such width: it is a
+ * share of a window whose size is the operator's business, and on the network
+ * a share of a phone nobody here can measure. Measuring it in the browser
+ * would work in a window and nowhere else, since the stream is served as
+ * markup with no Dioxus behind it and so has no mount event to measure in.
+ *
+ * So the browser works it out, from the box itself: the frame is a size
+ * container and the stage is scaled by its width over the presentation's own.
+ * `--slide-width` is the presentation's native width in pixels; dividing a
+ * container-query length by it gives the plain number `scale()` wants. */
+.monitor-slide-frame {
+    container-type: size;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.monitor-slide-stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    /* The presentation's own size. The slide is laid out at this and nothing
+     * else, so its line breaks fall where they fall on the wall. */
+    width: var(--slide-width, 1920px);
+    height: var(--slide-height, 1080px);
+    transform-origin: top left;
+    /* Fit the box in both directions and keep the proportions: the smaller of
+     * the two ratios is the one that fits. An engine that cannot divide two
+     * lengths drops this and the slide is drawn unscaled — visibly wrong
+     * rather than silently squeezed, which is the better of the two failures. */
+    transform: scale(min(
+        calc(100cqw / var(--slide-width, 1920px)),
+        calc(100cqh / var(--slide-height, 1080px))
+    ));
+}
+
+/* The renderer inside fills the stage it was given. */
+.monitor-slide-stage > * {
     width: 100%;
     height: 100%;
 }

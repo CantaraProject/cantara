@@ -19,9 +19,11 @@ use rust_i18n::t;
 use crate::components::presentation_components::StaticSlideRendererComponent;
 use crate::components::presenter_console_components::SlideList;
 use crate::logic::settings::{
-    MonitorDesign, MonitorLayout, MonitorWidget, PresentationDesign, WidgetKind, WidgetPlacement,
+    MonitorDesign, MonitorLayout, MonitorWidget, PresentationDesign, SpeakerNextPosition,
+    WidgetKind, WidgetPlacement,
 };
 use crate::logic::states::RunningPresentation;
+use cantara_songlib::slides::Slide;
 use crate::logic::timer::Timestamp;
 
 rust_i18n::i18n!("locales", fallback = "en");
@@ -140,11 +142,15 @@ pub fn MonitorViewComponent(
                             context,
                         }
                     },
-                    MonitorLayout::Speaker { next_slide_share } => rsx! {
+                    MonitorLayout::Speaker {
+                        next_slide_share,
+                        next_position,
+                    } => rsx! {
                         SpeakerLayout {
                             running_presentation,
                             slide_design: slide_design.clone(),
                             next_slide_share,
+                            next_position,
                         }
                     },
                 }
@@ -158,7 +164,7 @@ pub fn MonitorViewComponent(
     }
 }
 
-/// The current slide large, the next one small underneath it.
+/// The current slide large, the next one small beside or below it.
 ///
 /// For whoever is speaking: what they are saying now, and what comes after it.
 #[component]
@@ -166,31 +172,46 @@ fn SpeakerLayout(
     running_presentation: Signal<RunningPresentation>,
     slide_design: PresentationDesign,
     next_slide_share: f64,
+    next_position: SpeakerNextPosition,
 ) -> Element {
     let current = running_presentation.read().get_current_slide();
     let next = running_presentation.read().peek_next_slide();
+    // What the presentation is actually laid out at, so the slides here break
+    // their lines where the wall breaks them.
+    let slide_size = running_presentation.read().layout_size();
 
     // Kept inside the range that makes the layout what it is called: a next
-    // slide taking nine tenths of the height would leave the speaker reading
-    // the wrong one. See [`MonitorLayout::speaker_share`].
+    // slide taking nine tenths would leave the speaker reading the wrong one.
+    // See [`MonitorLayout::speaker_share`].
     let share = MonitorLayout::speaker_share(next_slide_share) * 100.0;
     let current_share = 100.0 - share;
 
+    // The share is of whichever direction the two are stacked in, so that
+    // moving the next slide from below to beside keeps its proportion.
+    let (direction, current_size, next_size) = match next_position {
+        SpeakerNextPosition::Below => (
+            "column",
+            format!("height: {current_share}%; width: 100%;"),
+            format!("height: {share}%; width: 100%;"),
+        ),
+        SpeakerNextPosition::Right => (
+            "row",
+            format!("width: {current_share}%; height: 100%;"),
+            format!("width: {share}%; height: 100%;"),
+        ),
+    };
+
     rsx! {
-        div { class: "monitor-speaker",
-            div {
-                class: "monitor-speaker-current",
-                style: "height: {current_share}%;",
+        div {
+            class: "monitor-speaker",
+            style: "flex-direction: {direction};",
+
+            div { class: "monitor-speaker-current", style: "{current_size}",
                 if let Some(slide) = current {
-                    StaticSlideRendererComponent {
-                        slide,
-                        presentation_design: slide_design.clone(),
-                    }
+                    SlideAtSlideSize { slide, design: slide_design.clone(), slide_size }
                 }
             }
-            div {
-                class: "monitor-speaker-next",
-                style: "height: {share}%;",
+            div { class: "monitor-speaker-next", style: "{next_size}",
                 // Labelled, because a speaker glancing at two slides has to
                 // know at once which of them is the one they are on. Without
                 // it the layout is two slides and a guess.
@@ -198,15 +219,63 @@ fn SpeakerLayout(
                     {t!("presentation.monitor_next").to_string()}
                 }
                 if let Some(slide) = next {
-                    StaticSlideRendererComponent {
-                        slide,
-                        presentation_design: slide_design.clone(),
-                    }
+                    SlideAtSlideSize { slide, design: slide_design.clone(), slide_size }
                 } else {
                     span { class: "monitor-speaker-next-end",
                         {t!("presentation.monitor_end").to_string()}
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A slide drawn at the presentation's own size and scaled to fit its box,
+/// keeping its proportions.
+///
+/// # Why it is not simply told to fill the box
+///
+/// A slide's type is set in **points** — the design says "32pt", and a point
+/// is an absolute length. Put the renderer straight into a small box and the
+/// words come out at their full size and overflow it; the box gets smaller and
+/// the text does not. That is why every other preview in Cantara draws the
+/// slide at its native size and shrinks the whole thing with a `transform`,
+/// and why this has to as well.
+///
+/// # Why the scale is CSS and not a number worked out in Rust
+///
+/// The other previews scale by a factor computed from a width they know — a
+/// thumbnail is 400 pixels wide because something said so. This box has no such
+/// width: it is a share of a window whose size is the operator's business, and
+/// on the network it is a share of a phone nobody here can measure.
+///
+/// Measuring it in the browser would work in a window and nowhere else: the
+/// network stream is served as markup with no Dioxus behind it, so there is no
+/// `onmounted` to measure in — the same rule that has caught four other things
+/// in this feature. So the scale is worked out by the browser, from the box
+/// itself, with container query units: the frame is a size container and the
+/// stage inside it is scaled by its width over the presentation's own.
+#[component]
+fn SlideAtSlideSize(
+    slide: Slide,
+    design: PresentationDesign,
+    /// The size the presentation is laid out at, in CSS pixels.
+    ///
+    /// Not a guess at 1920×1080: a slide's line breaks depend on the width it
+    /// is laid out at, and a preview that broke them somewhere else would not
+    /// be a preview of what the room is seeing. This is the number the
+    /// presentation window measured — see
+    /// [`RunningPresentation::layout_size`].
+    slide_size: (f64, f64),
+) -> Element {
+    let (width, height) = slide_size;
+
+    rsx! {
+        div {
+            class: "monitor-slide-frame",
+            style: "--slide-width: {width}px; --slide-height: {height}px;",
+            div { class: "monitor-slide-stage",
+                StaticSlideRendererComponent { slide, presentation_design: design }
             }
         }
     }

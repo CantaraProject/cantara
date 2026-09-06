@@ -2274,14 +2274,70 @@ pub enum MonitorLayout {
 
     /// The current slide large, the next one small. For whoever is speaking.
     Speaker {
-        /// How much of the height the next slide takes, from 0.0 to 1.0.
+        /// How much of the layout the next slide takes, from 0.0 to 1.0.
+        ///
+        /// Of the *height* when it sits below, of the *width* when it sits
+        /// beside — the share is of whichever direction the two are stacked
+        /// in, so that moving one to the other side keeps its proportion.
         ///
         /// Read through [`Self::speaker_share`], which keeps it inside the
         /// range a layout can actually use: a share of 0.9 would leave the
         /// speaker reading the *next* slide, and one of 0.0 would draw a strip
         /// of nothing.
         next_slide_share: f64,
+
+        /// Where the next slide sits.
+        #[serde(default)]
+        next_position: SpeakerNextPosition,
     },
+}
+
+/// Where the smaller slide sits in a speaker layout.
+///
+/// Both are useful and which is depends on the screen. A monitor on the floor
+/// in front of the platform is wide and short — two slides stacked on it leave
+/// each of them a letterbox, and side by side each gets a usable shape. A
+/// monitor turned upright, or one on a stand beside the lectern, is the other
+/// way round.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SpeakerNextPosition {
+    /// Under the current slide. What the layout has always done.
+    #[default]
+    Below,
+
+    /// Beside it, to the right.
+    Right,
+}
+
+impl SpeakerNextPosition {
+    /// Both, in the order the editor offers them.
+    pub const ALL: [SpeakerNextPosition; 2] =
+        [SpeakerNextPosition::Below, SpeakerNextPosition::Right];
+
+    /// The translation key for what this is called.
+    pub fn label_key(self) -> &'static str {
+        match self {
+            SpeakerNextPosition::Below => "settings.monitor_next_below",
+            SpeakerNextPosition::Right => "settings.monitor_next_right",
+        }
+    }
+
+    /// A stable name for a `<select>` to hand back. Not the translated label,
+    /// for the reason [`DesignKind::value`] gives.
+    pub fn value(self) -> &'static str {
+        match self {
+            SpeakerNextPosition::Below => "below",
+            SpeakerNextPosition::Right => "right",
+        }
+    }
+
+    /// Reads back what [`value`](Self::value) wrote.
+    pub fn from_value(value: &str) -> SpeakerNextPosition {
+        match value {
+            "right" => SpeakerNextPosition::Right,
+            _ => SpeakerNextPosition::Below,
+        }
+    }
 }
 
 impl Default for MonitorLayout {
@@ -3810,6 +3866,7 @@ mod tests {
         let monitor = PresentationDesignSettings::Monitor(MonitorDesign {
             layout: MonitorLayout::Speaker {
                 next_slide_share: 0.25,
+                next_position: SpeakerNextPosition::default(),
             },
             widgets: vec![MonitorWidget {
                 kind: WidgetKind::Clock { with_date: true },
@@ -3854,6 +3911,7 @@ mod tests {
             presentation_design_settings: PresentationDesignSettings::Monitor(MonitorDesign {
                 layout: MonitorLayout::Speaker {
                     next_slide_share: 0.3,
+                    next_position: SpeakerNextPosition::default(),
                 },
                 widgets: vec![
                     MonitorWidget {

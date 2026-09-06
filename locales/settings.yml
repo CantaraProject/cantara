@@ -175,8 +175,17 @@ settings:
     en: Slides shown before and after the current one
     de: Folien vor und nach der aktuellen
   monitor_next_slide_share:
-    en: Height of the next slide
-    de: Höhe der nächsten Folie
+    en: Share taken by the next slide
+    de: Anteil der nächsten Folie
+  monitor_next_position:
+    en: Where the next slide sits
+    de: Position der nächsten Folie
+  monitor_next_below:
+    en: Below the current slide
+    de: Unter der aktuellen Folie
+  monitor_next_right:
+    en: To the right of the current slide
+    de: Rechts neben der aktuellen Folie
   monitor_widgets:
     en: Widgets
     de: Widgets
