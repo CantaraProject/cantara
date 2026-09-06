@@ -1573,7 +1573,16 @@ fn slide_container_style(slide_content: &SlideContent) -> &'static str {
     match slide_content {
         // A video is fitted into the cell like a picture, so it needs one with
         // a height: `height: 100%` against a parent that has none is zero.
-        SlideContent::SimplePicture(_) | SlideContent::Video(_) => "height: 100%;",
+        //
+        // A PDF page is here for the same reason, and it took a browser to
+        // notice: on this machine pdf.js sizes the canvas itself, so the cell
+        // having no height never showed. Over the network the page is an
+        // image, and an image told to be `100%` of a parent with no height is
+        // left at its own size — which is exactly how a page came out sitting
+        // small in the middle of the design's background.
+        SlideContent::SimplePicture(_) | SlideContent::Video(_) | SlideContent::PdfPage(_) => {
+            "height: 100%;"
+        }
         // A markdown slide scrolls, so it needs the whole cell to scroll
         // inside; the same slide holding plain lyrics is laid out by the
         // design and must not be stretched.
@@ -2332,18 +2341,31 @@ fn SimplePictureSlideComponent(
     };
 
     rsx! {
-        div { style: "width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; z-index: 2;",
+        div { style: "{PICTURE_FRAME_STYLE}",
             img {
                 src: "{source}",
-                // As large as the slide allows, never distorted. `max-width`
-                // alone only ever shrinks, so a picture smaller than the slide
-                // was left sitting in the middle at its own size instead of
-                // filling the screen.
-                style: "width: 100%; height: 100%; object-fit: contain;",
+                style: "{PICTURE_STYLE}",
             }
         }
     }
 }
+
+/// The box a picture is fitted into: the whole cell, centred.
+///
+/// Shared with [`crate::components::stream_render`], which turns a PDF page
+/// into a picture for the network — a page *is* a picture there, so it has to
+/// be fitted the same way rather than by a second set of rules that happen to
+/// look similar.
+pub(crate) const PICTURE_FRAME_STYLE: &str =
+    "width: 100%; height: 100%; display: flex; align-items: center; \
+     justify-content: center; z-index: 2;";
+
+/// The picture itself: as large as the slide allows, never distorted.
+///
+/// `max-width` alone only ever shrinks, so a picture smaller than the slide was
+/// left sitting in the middle at its own size instead of filling the screen.
+/// `object-fit: contain` is what keeps the proportions while it does.
+pub(crate) const PICTURE_STYLE: &str = "width: 100%; height: 100%; object-fit: contain;";
 
 /// Which document a slide shows a page of, if it shows one.
 ///

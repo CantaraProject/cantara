@@ -893,6 +893,16 @@ a rendering made without a window cannot.
   has — so the canvas says which page it depicts in `data-pdf`/`data-page` and
   becomes the `<img>` that asks for it. The rewrite needs to know nothing about
   PDFs beyond the name the picture is filed under.
+
+  Then it appeared at its own size in the middle of the design's background.
+  `slide_container_style` gives a picture and a video a cell with a height —
+  `height: 100%` against a parent that has none is nothing — and a PDF page was
+  not on that list. It never showed here, because pdf.js sizes its own canvas;
+  over the network the page is an image, and an image told to fill a cell with
+  no height fills nothing. A page is now fitted exactly as a picture slide is,
+  from the *same* two style constants rather than a second set of rules that
+  happened to look similar — it is a picture there, so it has to be fitted like
+  one.
 * **`Unable to find a document in the renderer`, at error level, on every
   render.** `document::Link` and `document::Script` — which every slide
   renderer uses — look one up in the context and log when there is none. The
@@ -908,7 +918,12 @@ after mounting, the value has to be in the markup as well.
 
 ### Verified
 
-The served page was rendered to a file and opened in a browser. The stage
+The served page was rendered to a file and opened in a browser. A PDF page's
+geometry was measured there: a 1280×720 stage, a 1240×680 cell inside the
+design's padding, and the picture filling it with `object-fit: contain` — the
+same box a picture slide and a video get.
+
+For a song slide: The stage
 carries the design's own values, inline, exactly as the window does: black
 background, white text, `place-items: center stretch`, `text-align: center`,
 main content at 32pt (42.67px) and the spoiler at the design's ratio (29.87px),

@@ -1559,8 +1559,25 @@ mod tests {
             None,
             None,
         );
-        let mut running = crate::logic::states::RunningPresentation::new(vec![chapter]);
-        running.jump_to(0, 1);
+        // A PDF page as well as the song, because the page is the one whose
+        // proportions were wrong and geometry is what has to be looked at.
+        let pdf = crate::logic::states::SlideChapter::new(
+            vec![cantara_songlib::slides::Slide::new_pdf_page_slide(
+                "/srv/Handout.pdf".to_string(),
+                1,
+            )],
+            crate::logic::sourcefiles::SourceFile {
+                name: "Handout".to_string(),
+                path: std::path::PathBuf::from("Handout.pdf"),
+                file_type: crate::logic::sourcefiles::SourceFileType::Pdf,
+                md5_hash: None,
+                relative_path: None,
+            },
+            None,
+            None,
+        );
+        let mut running = crate::logic::states::RunningPresentation::new(vec![chapter, pdf]);
+        running.jump_to(1, 0);
 
         let html = stream_render::for_network(&stream_render::render_presentation(
             &running,

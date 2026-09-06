@@ -215,8 +215,14 @@ fn pdf_pages_as_pictures(html: &str) -> String {
             // The same name `media_sources` files the rendered page under, so
             // that the address and the bytes cannot disagree.
             let id = crate::logic::stream::protocol::media_id(&format!("{path}#page={page}"));
+            // Fitted exactly as a picture slide is — because that is what a
+            // PDF page becomes here. The styles come from the picture
+            // component rather than being written out again, so the two
+            // cannot drift into looking different.
             format!(
-                r#"<img class="pdf-page" alt="" style="display:block;max-width:100%;max-height:100%;" src="media/{id}"/>"#
+                r#"<div style="{frame}"><img alt="" style="{picture}" src="media/{id}"/></div>"#,
+                frame = crate::components::presentation_components::PICTURE_FRAME_STYLE,
+                picture = crate::components::presentation_components::PICTURE_STYLE,
             )
         })
         .into_owned()
@@ -626,6 +632,47 @@ mod tests {
         assert!(
             !rewritten.contains("<canvas"),
             "an empty canvas was left in the rendering: {rewritten}"
+        );
+        // Fitted the way a picture slide is fitted. Without this the page came
+        // out at its own size in the middle of the design's background — the
+        // right page, the wrong proportions.
+        assert!(
+            rewritten.contains("object-fit: contain"),
+            "the page is not fitted like a picture, so it will be distorted or \
+             left at its own size: {rewritten}"
+        );
+    }
+
+    /// A PDF page gets a cell with a height, exactly as a picture and a video
+    /// do.
+    ///
+    /// `height: 100%` against a parent that has none is nothing, and that is
+    /// what left a page sitting small in the middle. On this machine it never
+    /// showed: pdf.js sizes its own canvas.
+    #[test]
+    fn a_pdf_slide_is_given_a_cell_to_fill() {
+        use cantara_songlib::slides::Slide;
+
+        let chapter = SlideChapter::new(
+            vec![Slide::new_pdf_page_slide("/srv/Handout.pdf".to_string(), 1)],
+            SourceFile {
+                name: "Handout".to_string(),
+                path: std::path::PathBuf::from("Handout.pdf"),
+                file_type: SourceFileType::Pdf,
+                md5_hash: None,
+                relative_path: None,
+            },
+            None,
+            None,
+        );
+        let mut running = RunningPresentation::new(vec![chapter]);
+        running.jump_to(0, 0);
+
+        let html = render_presentation(&running, None);
+
+        assert!(
+            html.contains(r#"class="slide-container "#) && html.contains("height: 100%"),
+            "the page has no cell to fill: {html}"
         );
     }
 
