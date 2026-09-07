@@ -200,6 +200,14 @@ pub struct Configuration {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Offer {
     pub viewer: Option<String>,
+    /// Which view the stream serves, as the running order names it.
+    ///
+    /// Needed because a chapter now holds a division per view — see
+    /// [`crate::logic::states::Division`] — and this process has to be told
+    /// which one it is showing. `None` before Cantara has said, which reads as
+    /// the projection: the same slides the wall shows, which is what a viewer
+    /// was shown before any of this existed.
+    pub viewer_view: Option<uuid::Uuid>,
     pub console: Option<String>,
 }
 
@@ -501,6 +509,9 @@ fn serve(configuration: Configuration, socket: TcpStream) -> Result<(), String> 
 #[derive(Default)]
 struct Shown {
     presentation: Option<RunningPresentation>,
+    /// What this process is serving, so that it knows which view's slides a
+    /// viewer is being shown. Kept in step by [`ToChild::Offering`].
+    offer: Offer,
     /// The presentation as HTML, as Cantara last rendered it. Passed straight
     /// through into what viewers are served — see [`ToChild::Presentation`].
     rendered: Option<String>,
@@ -559,6 +570,7 @@ impl Shown {
             }
 
             ToChild::Offering(offer) => {
+                self.offer = offer.clone();
                 // The operator threw one of the switches. The server stays up
                 // either way; what changes is what it answers, and a console
                 // being driven from a browser has to hear about it — it shows
@@ -572,10 +584,21 @@ impl Shown {
         }
     }
 
+    /// Which set of slides this process is serving.
+    ///
+    /// One place, so that the state, the pictures and the videos cannot
+    /// disagree about which view a viewer is looking at.
+    fn division(&self) -> crate::logic::states::Division {
+        match self.offer.viewer_view {
+            Some(id) => crate::logic::states::Division::View(id),
+            None => crate::logic::states::Division::Projection,
+        }
+    }
+
     /// Tells the viewers where things stand.
     fn publish(&self, server: &mut StreamServer) {
         let state = match &self.presentation {
-            Some(running) => StreamState::of(running, 0)
+            Some(running) => StreamState::of(running, 0, self.division())
                 .with_live_video(self.video)
                 .with_html(self.rendered.clone().unwrap_or_default()),
             // Between services. The address stays open and says so.
@@ -596,8 +619,11 @@ impl Shown {
         let Some(running) = &self.presentation else {
             return;
         };
-        let state = StreamState::of(running, 0);
-        let sources = crate::logic::stream::protocol::media_sources(std::slice::from_ref(running));
+        let state = StreamState::of(running, 0, self.division());
+        let sources = crate::logic::stream::protocol::media_sources(
+            std::slice::from_ref(running),
+            &[self.division()],
+        );
 
         for id in state.videos() {
             if server.has_video(&id) {
@@ -701,7 +727,14 @@ fn video_paths(presentation: Option<&RunningPresentation>) -> std::collections::
     };
 
     for chapter in &presentation.presentation {
-        for slide in chapter.slides.iter().chain(chapter.slides_for_stream()) {
+        // Every division's slides, not only the projection's: a view may be
+        // shown a video the wall is not, and the server has to be able to find
+        // the file either way.
+        let every_division = chapter
+            .slides
+            .iter()
+            .chain(chapter.view_slides.values().flat_map(|view| view.slides.iter()));
+        for slide in every_division {
             if let SlideContent::Video(video) = &slide.slide_content {
                 paths.insert(video.video_path.clone());
             }

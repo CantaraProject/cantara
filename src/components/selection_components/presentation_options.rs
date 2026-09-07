@@ -501,7 +501,7 @@ fn SpecificOptions(
                     input {
                         r#type: "number",
                         min: "1",
-                        max: "3600",
+                        max: "{SlideTimerSettings::MAX_SECONDS}",
                         value: "{timer_seconds}",
                         style: "margin-top: 8px;",
                         // As with the field above: what is typed into a field
@@ -512,7 +512,11 @@ fn SpecificOptions(
                                 && secs > 0 {
                                     let mut items = selected_items.write();
                                     if let Some(ref mut ts) = items[item_index].timer_settings_option {
-                                        ts.timer_seconds = secs;
+                                        // Kept inside what the field says and
+                                        // what a browser timer can be given —
+                                        // the bound is stated once, on the
+                                        // setting itself.
+                                        ts.timer_seconds = SlideTimerSettings::usable_seconds(secs);
                                     }
                                 }
                         },
@@ -944,7 +948,7 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
                     for monitor in monitors.iter() {
                         option {
                             value: screen_value(monitor),
-                            selected: chosen_monitor.as_deref() == Some(screen_value(monitor)),
+                            selected: chosen_monitor.as_deref() == Some(screen_value(monitor).as_str()),
                             {screen_label(monitor)}
                         }
                     }
@@ -956,8 +960,8 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
 
 /// The name a screen is stored under. See [`screen_label`].
 #[cfg(feature = "desktop")]
-fn screen_value(monitor: &crate::logic::screens::MonitorInfo) -> &str {
-    &monitor.name
+fn screen_value(monitor: &crate::logic::screens::MonitorInfo) -> String {
+    crate::logic::screens::screen_key(monitor)
 }
 
 /// A build with no screens to enumerate has none to name.
@@ -967,8 +971,8 @@ fn screen_value(monitor: &crate::logic::screens::MonitorInfo) -> &str {
 /// would label is empty and neither is ever called. They exist so the loop
 /// that would call them still compiles.
 #[cfg(not(feature = "desktop"))]
-fn screen_value(_monitor: &()) -> &'static str {
-    ""
+fn screen_value(_monitor: &()) -> String {
+    String::new()
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -1111,10 +1115,22 @@ fn StreamSwitch() -> Element {
                     }
 
                     let stream = settings.read().stream.clone();
+                    // Which view the helper is to serve. Without it the helper
+                    // would show the projection's slides whatever the stream
+                    // view was set to.
+                    let view = settings
+                        .read()
+                        .stream_view()
+                        .map(|view| view.id)
+                        .unwrap_or_default();
                     starting.set(true);
                     spawn(async move {
                         let started = starting_a_helper(move || {
-                            crate::logic::network_host::enable_viewer(stream.port, stream.password)
+                            crate::logic::network_host::enable_viewer(
+                                stream.port,
+                                stream.password,
+                                view,
+                            )
                         })
                             .await;
                         starting.set(false);

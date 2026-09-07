@@ -390,13 +390,25 @@ fn App() -> Element {
                 // Which pictures are wanted is decided from the same state the
                 // server will build, by the same function, so the names match
                 // without either side being told them.
+                // Which view the phones are being shown. The pictures a
+                // viewer will ask for are that view's, not the projection's —
+                // a view with a division of its own has slides the wall never
+                // shows.
+                let division = settings
+                    .read()
+                    .stream_view()
+                    .map(|view| logic::states::Division::View(view.id))
+                    .unwrap_or(logic::states::Division::Projection);
+
                 let state = StreamState::of(
                     presentations.first().unwrap_or(&RunningPresentation::new(vec![])),
                     0,
+                    division,
                 );
                 let wanted = logic::network_host::media_wanted(state.media());
                 if !wanted.is_empty() {
-                    let sources = logic::stream::protocol::media_sources(&presentations);
+                    let sources =
+                        logic::stream::protocol::media_sources(&presentations, &[division]);
                     spawn(async move {
                         for id in wanted {
                             let Some(source) = sources.get(&id) else {

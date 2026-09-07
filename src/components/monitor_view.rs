@@ -291,13 +291,23 @@ fn MonitorWidgets(
     // redraws all of them rather than each keeping its own — and a view with
     // no widgets starts no timer at all.
     let mut now = use_signal(Timestamp::now);
-    let has_widgets = !widgets.is_empty();
+    // Read while rendering, so that a design gaining its first widget brings
+    // the loop below round rather than leaving it asleep.
+    let mut widget_count = use_signal(|| widgets.len());
+    if *widget_count.peek() != widgets.len() {
+        widget_count.set(widgets.len());
+    }
 
     use_future(move || async move {
-        if !has_widgets {
-            return;
-        }
         loop {
+            // Nothing to redraw: wait and look again rather than returning.
+            // Returning is what left a clock frozen for good when the widget
+            // was added to a design after the view was already open — the
+            // future had ended and there was nothing to start it again.
+            if widget_count() == 0 {
+                crate::logic::timer::sleep(WIDGET_TICK).await;
+                continue;
+            }
             crate::logic::timer::sleep(WIDGET_TICK).await;
             now.set(Timestamp::now());
         }

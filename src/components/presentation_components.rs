@@ -771,7 +771,13 @@ pub fn PresentationRendererComponent(
         let timer_opt = running_presentation.read().get_current_timer_settings();
         if let Some(timer) = timer_opt {
             let after_last = timer.after_last_slide;
-            let seconds = if timer.timer_seconds == 0 { 1 } else { timer.timer_seconds } as u64;
+            // Read through the setting's own bound rather than used as it
+            // stands: `setTimeout` takes a signed 32-bit count of
+            // milliseconds, and a value past that fires at once rather than
+            // never. See [`SlideTimerSettings::usable_seconds`].
+            let seconds =
+                crate::logic::settings::SlideTimerSettings::usable_seconds(timer.timer_seconds)
+                    as u64;
             let ms = seconds * 1000;
 
             spawn(async move {

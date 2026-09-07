@@ -66,8 +66,14 @@ impl Drop for Helper {
 }
 
 /// Starts offering the stream to viewers, and says where to find it.
-pub fn enable_viewer(port: u16, password: String) -> Result<String, String> {
-    offer(port, |offer| offer.viewer = Some(password.clone()))
+pub fn enable_viewer(port: u16, password: String, view: uuid::Uuid) -> Result<String, String> {
+    offer(port, |offer| {
+        offer.viewer = Some(password.clone());
+        // Which view the helper is serving. A chapter holds a division per
+        // view, and without this the helper would serve the projection's
+        // slides whatever the stream view was set to.
+        offer.viewer_view = Some(view);
+    })
 }
 
 /// Stops offering it. The helper stays up while the console is still on.
@@ -454,11 +460,18 @@ pub fn publish(presentation: Option<RunningPresentation>) {
     // `get_current_stream_design` is what `StreamState::of` already reads,
     // so the rendering and the rest of the payload cannot disagree about
     // what the phones are being shown.
+    // Which view the helper is serving, so that the rendering is of the same
+    // slides its state describes. The helper was told this when the stream was
+    // switched on; asking it here is what keeps the two from disagreeing.
+    let division = match helper.offer.viewer_view {
+        Some(id) => crate::logic::states::Division::View(id),
+        None => crate::logic::states::Division::Projection,
+    };
     let rendered = presentation.as_ref().map(|running| {
         crate::components::stream_render::for_network(
             &crate::components::stream_render::render_presentation(
                 running,
-                Some(running.get_current_stream_design()),
+                Some(running.current_design_in(division)),
             ),
         )
     });
@@ -593,7 +606,7 @@ mod tests {
 
         // Port 0: whatever is free, so that a machine already running Cantara
         // does not fail this.
-        let address = match enable_viewer(0, String::new()) {
+        let address = match enable_viewer(0, String::new(), uuid::Uuid::nil()) {
             Ok(address) => address,
             Err(reason) => panic!("the switch did not go on: {reason}"),
         };

@@ -46,6 +46,39 @@ pub fn enumerate_monitors(desktop: &DesktopContext) -> Vec<MonitorInfo> {
         .collect()
 }
 
+/// A name for a screen that is actually its own.
+///
+/// `MonitorInfo::name` is what the platform reports, and on Windows and
+/// Wayland it is frequently empty and frequently the same for two screens —
+/// two identical monitors from the same maker report the same string, or none.
+/// A view pointed at "" would then match the first screen, or every screen,
+/// and two views asking for different monitors would be given the same one.
+///
+/// So a screen is identified by its name *and* its place in the enumeration.
+/// The name is kept in front because it is what a person recognises, and the
+/// position disambiguates rather than replacing it.
+pub fn screen_key(monitor: &MonitorInfo) -> String {
+    format!("{}#{}", monitor.name, monitor.id)
+}
+
+/// The monitor a stored key names, if it is still there.
+///
+/// Matched on the whole key first. A screen that has moved in the enumeration
+/// — one unplugged from in front of it — is then looked for by name alone,
+/// because a name that is not empty is still the better evidence of which
+/// screen a person meant.
+fn monitor_by_key<'a>(monitors: &'a [MonitorInfo], key: &str) -> Option<&'a MonitorInfo> {
+    if let Some(exact) = monitors.iter().find(|monitor| screen_key(monitor) == key) {
+        return Some(exact);
+    }
+
+    let name = key.rsplit_once('#').map(|(name, _)| name).unwrap_or(key);
+    if name.is_empty() {
+        return None;
+    }
+    monitors.iter().find(|monitor| monitor.name == name)
+}
+
 /// Resolves which monitor to use for presentation based on settings.
 /// If `configured_name` is Some, tries to find a monitor with that name.
 /// Otherwise, prefers a non-primary monitor (for presentation) or primary monitor (for presenter console).
@@ -58,11 +91,14 @@ pub fn resolve_monitor(
         return None;
     }
 
-    // If a specific monitor is configured, try to find it
-    if let Some(name) = configured_name
-        && let Some(monitor) = monitors.iter().find(|m| &m.name == name) {
-            return Some(monitor.clone());
-        }
+    // If a specific monitor is configured, try to find it. By its whole key,
+    // not its name: a name is often empty and often shared — see
+    // [`screen_key`].
+    if let Some(key) = configured_name
+        && let Some(monitor) = monitor_by_key(monitors, key)
+    {
+        return Some(monitor.clone());
+    }
 
     // Auto-select: prefer primary or non-primary based on the flag
     if prefer_primary {
@@ -141,7 +177,7 @@ pub fn place_screen_views(
     {
         let monitor = resolve_monitor(monitors, monitor_name, false);
         if let Some(ref monitor) = monitor {
-            taken.push(monitor.name.clone());
+            taken.push(screen_key(monitor));
         }
         placed.push(PlacedView {
             index: *index,
@@ -155,20 +191,20 @@ pub fn place_screen_views(
     {
         let free = monitors
             .iter()
-            .filter(|monitor| !taken.contains(&monitor.name))
+            .filter(|monitor| !taken.contains(&screen_key(monitor)))
             // The same preference the projection has always had: the screen
             // that is not the one Cantara is being operated on.
             .find(|monitor| !monitor.is_primary)
             .or_else(|| {
                 monitors
                     .iter()
-                    .find(|monitor| !taken.contains(&monitor.name))
+                    .find(|monitor| !taken.contains(&screen_key(monitor)))
             })
             .cloned();
 
         let monitor = free.or_else(|| resolve_monitor(monitors, &None, false));
         if let Some(ref monitor) = monitor {
-            taken.push(monitor.name.clone());
+            taken.push(screen_key(monitor));
         }
         placed.push(PlacedView {
             index: *index,
@@ -339,6 +375,89 @@ mod tests {
 
         assert_eq!(placed.len(), 1);
         assert_eq!(placed[0].index, 2);
+    }
+
+    /// Two screens that report no name at all are still two screens.
+    ///
+    /// Windows and Wayland frequently report an empty name, and two identical
+    /// monitors report the same one. Matched by name, every such screen is the
+    /// same screen: two views asking for different monitors would be given
+    /// one, and the second window would open on top of the first.
+    #[test]
+    fn screens_with_no_name_are_told_apart() {
+        let monitors = vec![
+            monitor(0, "", true),
+            monitor(1, "", false),
+            monitor(2, "", false),
+        ];
+        let views = vec![
+            screen_view("One", Some(&screen_key(&monitors[1])), true),
+            screen_view("Two", Some(&screen_key(&monitors[2])), true),
+        ];
+
+        let placed = place_screen_views(&views, &monitors);
+
+        assert_eq!(
+            placed[0].monitor.as_ref().map(|monitor| monitor.id),
+            Some(1)
+        );
+        assert_eq!(
+            placed[1].monitor.as_ref().map(|monitor| monitor.id),
+            Some(2),
+            "two nameless screens were treated as one"
+        );
+    }
+
+    /// The same for two screens that report the *same* name — a pair of
+    /// identical monitors, which is what a hall usually has.
+    #[test]
+    fn screens_that_share_a_name_are_told_apart() {
+        let monitors = vec![
+            monitor(0, "Laptop", true),
+            monitor(1, "BenQ", false),
+            monitor(2, "BenQ", false),
+        ];
+        let views = vec![
+            screen_view("One", Some(&screen_key(&monitors[1])), true),
+            screen_view("Two", Some(&screen_key(&monitors[2])), true),
+        ];
+
+        let placed = place_screen_views(&views, &monitors);
+
+        assert_ne!(
+            placed[0].monitor.as_ref().map(|monitor| monitor.id),
+            placed[1].monitor.as_ref().map(|monitor| monitor.id),
+            "two screens of the same name were treated as one"
+        );
+    }
+
+    /// A screen that has moved in the enumeration — one unplugged from in
+    /// front of it — is still found by its name, which is the better evidence
+    /// of which screen a person meant.
+    #[test]
+    fn a_named_screen_is_found_again_after_it_has_moved() {
+        let before = monitor(2, "Beamer", false);
+        let after = vec![monitor(0, "Laptop", true), monitor(1, "Beamer", false)];
+
+        let found = resolve_monitor(&after, &Some(screen_key(&before)), false);
+
+        assert_eq!(found.map(|monitor| monitor.id), Some(1));
+    }
+
+    /// But an *unnamed* screen that has moved is not guessed at: there is
+    /// nothing to recognise it by, and picking one at random would put the
+    /// presentation on a screen nobody chose.
+    #[test]
+    fn an_unnamed_screen_that_has_moved_is_not_guessed_at() {
+        let before = monitor(3, "", false);
+        let after = vec![monitor(0, "Laptop", true), monitor(1, "Beamer", false)];
+
+        let found = resolve_monitor(&after, &Some(screen_key(&before)), false);
+
+        // Falls back the way an unplugged screen always has: to a screen that
+        // exists, rather than to nothing at all.
+        assert!(found.is_some());
+        assert_eq!(found.map(|monitor| monitor.name), Some("Beamer".to_string()));
     }
 
     /// A machine with one screen still shows the presentation — on the screen

@@ -1007,6 +1007,38 @@ An engine that cannot divide two lengths drops the declaration and draws the
 slide unscaled — visibly wrong rather than silently squeezed, which is the
 better of the two failures.
 
+## 3b′: one division per view
+
+`Division` was a pair — `Projection` and `Stream` — from when a service had
+exactly two outputs, and a chapter carried one alternative set of slides to go
+with it: `stream_slides`, `stream_slide_map`, `stream_design_option`. A second
+network view had nowhere to put its own division, which is why 3b could not be
+built on top of it.
+
+Now `Division` is `Projection` or `View(Uuid)`, and a chapter carries
+`view_slides: HashMap<Uuid, ViewDivision>` — a design, a set of slides and the
+map from the projection's slides to them, per view that asked for one. A view
+that asked for nothing gets no entry at all, so an ordinary service still holds
+exactly one set of slides.
+
+Keyed by the view's identity rather than its position, for the reason the
+identity was added in the first place: a running order outlives an edit to the
+view list, and a chapter built while "Stream" was second would otherwise start
+describing whatever became second after a view above it was deleted.
+
+`StreamDefaults` became `ViewDefaults` and answers for every view rather than
+for "the stream"; `StreamState::of` is told which division it is building for;
+the helper is told which view it serves, so its state, its pictures and its
+videos cannot disagree about what a viewer is looking at.
+
+Sixty-seven call sites across seven files, and the projection is still the
+reference: slide numbers, the console's counting and the whole-multiple rule on
+divisions are all described against it, exactly as before.
+
+**Still to come — 3b itself.** The socket serves one network view. Serving
+several means a router per path and a state per view, which is now a change to
+the server alone rather than to the model underneath it.
+
 ## What the Android build said
 
 The mobile build broke on `stream_render`, and the error was worth more than

@@ -314,6 +314,32 @@ fn MonitorDesignSettings(
         MonitorLayout::Speaker { .. } => "speaker",
     };
 
+    // What each layout was last set to, kept across a switch to the other.
+    //
+    // Held here rather than in the design, because a design stores the layout
+    // it *is* — a monitor design that carried the settings of a layout it is
+    // not would be a second state to keep in step for no gain. This survives
+    // as long as the editor is open, which is as long as somebody is trying
+    // the two against each other.
+    let mut last_share = use_signal(|| 0.25_f64);
+    let mut last_position = use_signal(SpeakerNextPosition::default);
+    let mut last_context = use_signal(|| Some(2_usize));
+
+    match design.layout {
+        MonitorLayout::SlideList { context } => last_context.set(context),
+        MonitorLayout::Speaker {
+            next_slide_share,
+            next_position,
+        } => {
+            last_share.set(next_slide_share);
+            last_position.set(next_position);
+        }
+    }
+
+    let remembered_share = move || *last_share.peek();
+    let remembered_position = move || *last_position.peek();
+    let remembered_context = move || *last_context.peek();
+
     rsx! {
         h3 { {t!("settings.monitor_configuration").to_string()} }
 
@@ -326,12 +352,20 @@ fn MonitorDesignSettings(
                         onchange: {
                             let design = design.clone();
                             move |event: Event<FormData>| {
+                                // What the layout being left was set to is
+                                // kept, so that trying the other one and
+                                // coming back finds the share and the context
+                                // where they were left. The comment above
+                                // promised this and the code did not do it:
+                                // both were reset to their defaults.
                                 let layout = match event.value().as_str() {
                                     "speaker" => MonitorLayout::Speaker {
-                                        next_slide_share: 0.25,
-                                        next_position: SpeakerNextPosition::default(),
+                                        next_slide_share: remembered_share(),
+                                        next_position: remembered_position(),
                                     },
-                                    _ => MonitorLayout::default(),
+                                    _ => MonitorLayout::SlideList {
+                                        context: remembered_context(),
+                                    },
                                 };
                                 onchange.call(MonitorDesign { layout, ..design.clone() });
                             }

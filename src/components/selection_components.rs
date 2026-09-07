@@ -129,8 +129,8 @@ pub fn Selection() -> Element {
 
     // What the phones are shown, generally: the service's choice, resolved
     // from the design and slide-settings lists the user maintains.
-    let stream_defaults_memo = use_memo(move || {
-        crate::logic::stream_view::StreamDefaults::of(&settings.read())
+    let view_defaults_memo = use_memo(move || {
+        crate::logic::stream_view::ViewDefaults::all(&settings.read())
     });
 
     // The installation's tag reading rules, which the slides are built with.
@@ -238,7 +238,7 @@ pub fn Selection() -> Element {
                                 &mut running_presentations,
                                 &default_presentation_design_memo(),
                                 &default_song_slide_settings_memo(),
-                                &stream_defaults_memo(),
+                                &view_defaults_memo(),
                                 &tag_mappings_memo(),
                             );
                         },
@@ -255,7 +255,7 @@ pub fn Selection() -> Element {
                                     &mut running_presentations,
                                     &default_presentation_design_memo(),
                                     &default_song_slide_settings_memo(),
-                                    &stream_defaults_memo(),
+                                    &view_defaults_memo(),
                                     &tag_mappings_memo(),
                                 );
                                 nav.push(crate::Route::PresenterConsolePage {});
@@ -471,7 +471,7 @@ pub fn Selection() -> Element {
                                     &mut running_presentations,
                                     &default_presentation_design_memo(),
                                     &default_song_slide_settings_memo(),
-                                    &stream_defaults_memo(),
+                                    &view_defaults_memo(),
                                     &settings.read(),
                                     settings,
                                 );
@@ -481,7 +481,7 @@ pub fn Selection() -> Element {
                                     &mut running_presentations,
                                     &default_presentation_design_memo(),
                                     &default_song_slide_settings_memo(),
-                                    &stream_defaults_memo(),
+                                    &view_defaults_memo(),
                                     &tag_mappings_memo(),
                                 );
                                 if settings.read().presenter_console_in_main_window
@@ -594,7 +594,7 @@ fn start_presentation(
     running_presentations: &mut Signal<Vec<RunningPresentation>>,
     default_presentation_design: &PresentationDesign,
     default_slide_settings: &SlideSettings,
-    stream_defaults: &crate::logic::stream_view::StreamDefaults,
+    view_defaults: &[crate::logic::stream_view::ViewDefaults],
     settings_read: &Settings,
     // `settings` is the live signal handed to the windows this opens. A window
     // is a `VirtualDom` of its own and inherits no context, so everything one
@@ -611,7 +611,7 @@ fn start_presentation(
         running_presentations,
         default_presentation_design,
         default_slide_settings,
-        stream_defaults,
+        view_defaults,
         &settings_read.tag_mappings,
     )
     .is_some()
@@ -705,7 +705,7 @@ fn start_presentation(
     running_presentations: &mut Signal<Vec<RunningPresentation>>,
     default_presentation_design: &PresentationDesign,
     default_slide_settings: &SlideSettings,
-    stream_defaults: &crate::logic::stream_view::StreamDefaults,
+    view_defaults: &[crate::logic::stream_view::ViewDefaults],
     settings_read: &Settings,
     // Unused: the web build has one `VirtualDom` and one page, so the settings
     // context is the one this is already in.
@@ -722,7 +722,7 @@ fn start_presentation(
         selected_items,
         default_presentation_design,
         default_slide_settings,
-        stream_defaults,
+        view_defaults,
         &settings_read.tag_mappings,
     ) else {
         return;

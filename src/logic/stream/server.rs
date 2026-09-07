@@ -1132,8 +1132,11 @@ mod tests {
         use crate::logic::settings::PresentationDesign;
         use crate::logic::sourcefiles::{SourceFile, SourceFileType};
         use crate::logic::states::SelectedItemRepresentation;
-        use crate::logic::stream_view::StreamDefaults;
+        use crate::logic::stream_view::ViewDefaults;
         use cantara_songlib::slides::SlideSettings;
+
+        // The view the phones are, for this test.
+        let phones = uuid::Uuid::from_u128(4);
 
         let item = SelectedItemRepresentation::new_with_sourcefile(SourceFile {
             name: "Amazing Grace".to_string(),
@@ -1150,13 +1153,14 @@ mod tests {
                 max_lines: Some(2),
                 ..SlideSettings::default()
             },
-            &StreamDefaults {
+            &[ViewDefaults {
+                id: phones,
                 design: None,
                 slide_settings: Some(SlideSettings {
                     max_lines: Some(4),
                     ..SlideSettings::default()
                 }),
-            },
+            }],
                     &[],
 )
         .expect("a presentation");
@@ -1169,10 +1173,16 @@ mod tests {
             .as_ref()
             .expect("a position")
             .chapter_slide();
-        let (_, stream_slide) = presentation.stream_position().expect("a mapped position");
+        let (_, stream_slide) = presentation
+            .position_in(crate::logic::states::Division::View(phones))
+            .expect("a mapped position");
 
         let mut server = serving("");
-        server.publish(StreamState::of(&presentation, 0));
+        server.publish(StreamState::of(
+            &presentation,
+            0,
+            crate::logic::states::Division::View(phones),
+        ));
 
         let served: StreamState = client()
             .get(at(&server, "/state"))
@@ -1598,7 +1608,7 @@ mod tests {
 
         let html = stream_render::for_network(&stream_render::render_presentation(
             &running,
-            Some(running.get_current_stream_design()),
+            Some(running.current_design_in(crate::logic::states::Division::Projection)),
         ));
 
         // The stylesheets the page carries, around the rendering and nothing

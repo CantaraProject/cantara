@@ -543,6 +543,28 @@ impl Default for SlideTimerSettings {
     }
 }
 
+impl SlideTimerSettings {
+    /// The longest a slide may be left to stand before the timer moves on.
+    ///
+    /// An hour. Longer than any slide in a service, and — the reason it is a
+    /// hard limit rather than a suggestion — well inside what a browser's
+    /// `setTimeout` can be given. That takes a *signed 32-bit* count of
+    /// milliseconds: past about 24.9 days it overflows and the timer fires
+    /// **immediately** instead of never. A slide set to advance in a year
+    /// would advance at once, in front of the congregation.
+    pub const MAX_SECONDS: u32 = 3600;
+
+    /// The wait a timer will actually use.
+    ///
+    /// The editor's field states the same bounds, but a field is not the only
+    /// way a value gets in: a running order is a file, and one written by hand
+    /// or by an older version can say anything. Read through here rather than
+    /// trusted, so the two cannot disagree — and so the bound is stated once.
+    pub fn usable_seconds(seconds: u32) -> u32 {
+        seconds.clamp(1, Self::MAX_SECONDS)
+    }
+}
+
 /// The transition effect to use between slides.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Default, Debug)]
 pub enum SlideTransition {
@@ -3649,6 +3671,37 @@ mod tests {
         );
     }
 
+    /// A slide timer is kept inside what a browser's timer can be given.
+    ///
+    /// `setTimeout` takes a *signed 32-bit* count of milliseconds. Past about
+    /// 24.9 days it overflows and fires **immediately** rather than never — so
+    /// a slide set to advance in a year would advance at once, in front of the
+    /// congregation. The editor's field says the same bound, but a running
+    /// order is a file and can say anything.
+    #[test]
+    fn a_slide_timer_cannot_be_set_past_what_a_browser_can_wait() {
+        assert_eq!(SlideTimerSettings::usable_seconds(30), 30);
+        assert_eq!(
+            SlideTimerSettings::usable_seconds(u32::MAX),
+            SlideTimerSettings::MAX_SECONDS
+        );
+
+        // The bound in milliseconds, which is the number that actually reaches
+        // the browser.
+        let milliseconds = u64::from(SlideTimerSettings::MAX_SECONDS) * 1000;
+        assert!(
+            milliseconds < i32::MAX as u64,
+            "the longest wait still overflows a browser timer"
+        );
+    }
+
+    /// Zero is not a wait. A timer of nought would advance every slide as fast
+    /// as the page could draw it.
+    #[test]
+    fn a_slide_timer_of_nothing_is_read_as_a_second() {
+        assert_eq!(SlideTimerSettings::usable_seconds(0), 1);
+    }
+
     /// A view added from the list starts as another window showing what the
     /// projection shows: every part of it is one choice away from whatever the
     /// user actually wants, and none of it is a surprise.
@@ -3748,9 +3801,13 @@ mod tests {
         let stream = settings.stream_view_index().expect("there is a stream view");
         settings.views[stream].design_index = Some(1);
 
-        let defaults = crate::logic::stream_view::StreamDefaults::of(&settings);
+        let defaults = crate::logic::stream_view::ViewDefaults::all(&settings);
+        let stream_defaults = defaults
+            .iter()
+            .find(|defaults| Some(defaults.id) == settings.stream_view().map(|view| view.id))
+            .expect("the stream view is among them");
         assert_eq!(
-            defaults.design.map(|design| design.name),
+            stream_defaults.design.as_ref().map(|design| design.name.clone()),
             Some("For phones".to_string())
         );
     }
@@ -3764,10 +3821,16 @@ mod tests {
         let stream = settings.stream_view_index().expect("there is a stream view");
         settings.delete_view(stream);
 
-        let defaults = crate::logic::stream_view::StreamDefaults::of(&settings);
+        let defaults = crate::logic::stream_view::ViewDefaults::all(&settings);
 
-        assert!(defaults.design.is_none());
-        assert!(defaults.slide_settings.is_none());
+        assert!(
+            settings.stream_view().is_none(),
+            "the stream view was deleted"
+        );
+        assert!(
+            defaults.iter().all(|view| view.design.is_none()),
+            "a view names a design although none was set"
+        );
     }
 
     /// An index left pointing past the end of the list — a design deleted by

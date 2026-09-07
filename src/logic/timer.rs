@@ -94,9 +94,17 @@ impl Timestamp {
 /// an error for.
 #[cfg(not(target_arch = "wasm32"))]
 fn now_milliseconds() -> i64 {
+    // `as i64` on a `u128` *wraps*, so a machine whose clock has been set to
+    // some absurd year would not merely be wrong — it could come back
+    // negative, and a timer measured against it would read as the future. The
+    // conversion saturates instead: a clock that far out is unusable either
+    // way, and a number at the end of the range is at least monotonic with
+    // what it was given.
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(since) => since.as_millis() as i64,
-        Err(before) => -(before.duration().as_millis() as i64),
+        Ok(since) => i64::try_from(since.as_millis()).unwrap_or(i64::MAX),
+        Err(before) => i64::try_from(before.duration().as_millis())
+            .map(|millis| -millis)
+            .unwrap_or(i64::MIN),
     }
 }
 

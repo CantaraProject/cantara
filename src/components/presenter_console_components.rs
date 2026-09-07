@@ -1186,10 +1186,19 @@ fn StreamPreview(running_presentation: Signal<RunningPresentation>) -> Element {
         return rsx! {};
     };
 
+    // Which view the phones are looking at. A chapter holds a division per
+    // view now, so the preview has to say which one it is previewing — and it
+    // is the stream's, which is the one the address above belongs to.
+    let division = use_settings()
+        .read()
+        .stream_view()
+        .map(|view| Division::View(view.id))
+        .unwrap_or(Division::Projection);
+
     let rp = running_presentation.read();
-    let differs = rp.current_stream_differs();
-    let slide = rp.get_current_stream_slide();
-    let design = rp.get_current_stream_design();
+    let differs = rp.current_differs_in(division);
+    let slide = rp.current_slide_in(division);
+    let design = rp.current_design_in(division);
     let blacked_out = rp.is_black_screen;
 
     // Laid out at the projection's size and scaled down, exactly as the
@@ -1218,7 +1227,7 @@ fn StreamPreview(running_presentation: Signal<RunningPresentation>) -> Element {
     // read as the same kind of thing, and they now are — see
     // [`RunningPresentation::counter_in`].
     let counter = rp
-        .counter_in(Division::Stream)
+        .counter_in(division)
         .map(|(slide, total)| format!("{slide} / {total}"));
 
     rsx! {

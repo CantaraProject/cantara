@@ -585,9 +585,9 @@ impl RunningPresentation {
                 let position = self.position.as_ref()?;
                 (position.chapter(), position.chapter_slide())
             }
-            // Where the phones stand is worked out from where the projection
+            // Where a view stands is worked out from where the projection
             // stands, since that is what the operator moves.
-            Division::Stream => self.stream_position()?,
+            Division::View(_) => self.position_in(division)?,
         };
 
         Some((
@@ -648,53 +648,52 @@ impl RunningPresentation {
         }
     }
 
-    /// The design a viewer on the network sees, for the chapter that is up.
-    pub fn get_current_stream_design(&self) -> PresentationDesign {
+    /// The design `division` sees, for the chapter that is up.
+    pub fn current_design_in(&self, division: Division) -> PresentationDesign {
         match self.position.as_ref() {
             Some(pos) => self
                 .presentation
                 .get(pos.chapter())
-                .and_then(|chapter| chapter.design_for_stream())
+                .and_then(|chapter| chapter.design_in(division))
                 .unwrap_or_default(),
             None => PresentationDesign::default(),
         }
     }
 
-    /// Where a viewer on the network stands, as a chapter and a slide within
-    /// it.
+    /// Where `division` stands, as a chapter and a slide within it.
     ///
     /// The same place as the projection where the two show the same slides,
     /// and the mapped one where the service asked the stream to divide the
     /// song differently.
-    pub fn stream_position(&self) -> Option<(usize, usize)> {
+    pub fn position_in(&self, division: Division) -> Option<(usize, usize)> {
         let position = self.position.as_ref()?;
         let chapter = self.presentation.get(position.chapter())?;
         Some((
             position.chapter(),
-            chapter.stream_slide_for(position.chapter_slide()),
+            chapter.slide_for(division, position.chapter_slide()),
         ))
     }
 
-    /// The slide a viewer on the network is looking at.
+    /// The slide `division` is looking at.
     ///
     /// What the presenter console previews beside the projection's, so that a
     /// moderator can see both of the things the congregation can see.
-    pub fn get_current_stream_slide(&self) -> Option<Slide> {
-        let (chapter_index, slide_index) = self.stream_position()?;
+    pub fn current_slide_in(&self, division: Division) -> Option<Slide> {
+        let (chapter_index, slide_index) = self.position_in(division)?;
         self.presentation
             .get(chapter_index)?
-            .slides_for_stream()
+            .slides_in(division)
             .get(slide_index)
             .cloned()
     }
 
-    /// Whether the chapter that is up shows a viewer on the network something
-    /// other than what the projection shows.
-    pub fn current_stream_differs(&self) -> bool {
+    /// Whether the chapter that is up shows `division` something other than
+    /// what the projection shows.
+    pub fn current_differs_in(&self, division: Division) -> bool {
         self.position
             .as_ref()
             .and_then(|position| self.presentation.get(position.chapter()))
-            .is_some_and(|chapter| chapter.stream_differs())
+            .is_some_and(|chapter| chapter.differs_in(division))
     }
 
     /// Compares two `RunningPresentation` instances for structural equality,
@@ -890,29 +889,22 @@ pub struct SlideChapter {
     pub presentation_design_option: Option<PresentationDesign>,
     pub slide_settings_option: Option<SlideSettings>,
 
-    /// The design the network stream shows this chapter in, where that is not
-    /// the projection's. [None] means the phones look like the wall.
-    #[serde(default)]
-    pub stream_design_option: Option<PresentationDesign>,
-
-    /// A second division of the same song, for the phones.
+    /// What one view shows of this chapter, where that is not what the
+    /// projection shows — by the view's own identity.
     ///
-    /// [None] — the ordinary case — means the stream shows
-    /// [`slides`](Self::slides) itself, and nothing here has to be kept in
-    /// step with anything. A second set only exists where the service asked
-    /// for one, and then [`stream_slide_map`](Self::stream_slide_map) says
-    /// which of these slides each slide of the projection is showing part of.
-    #[serde(default)]
-    pub stream_slides: Option<Vec<Slide>>,
-
-    /// For every slide of [`slides`](Self::slides), the index into
-    /// [`stream_slides`](Self::stream_slides) that shows it.
+    /// Empty in the ordinary case, which is every view showing
+    /// [`slides`](Self::slides) in the chapter's own design. An entry exists
+    /// only where a view asked for a design or a division of its own.
     ///
-    /// Worked out once, when the slides are generated, rather than every time
-    /// a viewer is told where things stand: it depends only on the two sets of
-    /// slides, and both are fixed for as long as the presentation runs.
+    /// Keyed by [`View::id`](crate::logic::settings::View::id) rather than by
+    /// a position, because a running order outlives an edit to the view list:
+    /// a chapter built while "Stream" was second would otherwise start
+    /// describing whatever became second after a view above it was deleted.
+    ///
+    /// This was a single pair of fields — `stream_design_option` and
+    /// `stream_slides` — from when a service had exactly one second output.
     #[serde(default)]
-    pub stream_slide_map: Vec<usize>,
+    pub view_slides: std::collections::HashMap<Uuid, ViewDivision>,
 
     /// Optional timer settings for automatic slide advance.
     #[serde(default)]
@@ -942,66 +934,101 @@ impl SlideChapter {
             source_file,
             presentation_design_option: presentation_design,
             slide_settings_option: slide_settings,
-            stream_design_option: None,
-            stream_slides: None,
-            stream_slide_map: Vec::new(),
+            view_slides: std::collections::HashMap::new(),
             timer_settings_option: None,
             transition_option: SlideTransition::default(),
             inline_markdown: None,
         }
     }
 
-    /// The slides the network stream shows for this chapter.
-    ///
-    /// The projection's own, unless the service asked for a second division.
-    pub fn slides_for_stream(&self) -> &[Slide] {
-        match &self.stream_slides {
-            Some(slides) => slides,
-            None => &self.slides,
+    /// What this view was given of this chapter, if it was given anything.
+    fn division(&self, division: Division) -> Option<&ViewDivision> {
+        match division {
+            Division::Projection => None,
+            Division::View(id) => self.view_slides.get(&id),
         }
     }
 
     /// The slides of this chapter in `division`.
     ///
     /// The one place that answers "which set of slides is meant", so that
-    /// everything counting them agrees. See [`Division`].
+    /// everything counting them agrees. A view that asked for no division of
+    /// its own is shown the projection's, which is the ordinary case and costs
+    /// nothing. See [`Division`].
     pub fn slides_in(&self, division: Division) -> &[Slide] {
-        match division {
-            Division::Projection => &self.slides,
-            Division::Stream => self.slides_for_stream(),
+        match self.division(division) {
+            Some(view) if !view.slides.is_empty() => &view.slides,
+            _ => &self.slides,
         }
     }
 
-    /// Which slide the stream is showing while the projection shows `slide`.
+    /// Which slide `division` is showing while the projection shows `slide`.
     ///
     /// The same index where there is no second division, and the mapped one
     /// where there is. Clamped rather than trusted: a map is generated
     /// alongside the slides, and a presentation restored from an older session
     /// may have one that no longer fits.
-    pub fn stream_slide_for(&self, slide: usize) -> usize {
-        if self.stream_slides.is_none() {
+    pub fn slide_for(&self, division: Division, slide: usize) -> usize {
+        let Some(view) = self.division(division) else {
+            return slide;
+        };
+        if view.slides.is_empty() {
             return slide;
         }
-        let last = self.slides_for_stream().len().saturating_sub(1);
-        self.stream_slide_map.get(slide).copied().unwrap_or(0).min(last)
+        let last = view.slides.len().saturating_sub(1);
+        view.map.get(slide).copied().unwrap_or(0).min(last)
     }
 
-    /// The design the stream shows this chapter in — its own where it has one,
-    /// and otherwise the projection's.
-    pub fn design_for_stream(&self) -> Option<PresentationDesign> {
-        self.stream_design_option
-            .clone()
+    /// The design `division` shows this chapter in — its own where it has one,
+    /// and otherwise the chapter's.
+    pub fn design_in(&self, division: Division) -> Option<PresentationDesign> {
+        self.division(division)
+            .and_then(|view| view.design.clone())
             .or_else(|| self.presentation_design_option.clone())
     }
 
-    /// Whether a viewer is being shown something other than the projection.
+    /// Whether `division` is being shown something other than the projection.
     ///
     /// What the presenter console asks before offering a second preview: with
     /// nothing differing there is nothing to preview, and a second picture of
     /// the same slide is just clutter beside the first.
-    pub fn stream_differs(&self) -> bool {
-        self.stream_slides.is_some() || self.stream_design_option.is_some()
+    pub fn differs_in(&self, division: Division) -> bool {
+        self.division(division)
+            .is_some_and(|view| !view.slides.is_empty() || view.design.is_some())
     }
+}
+
+/// What one view shows of a chapter, where that is not what the projection
+/// shows.
+///
+/// Both halves are optional in effect: a view may differ only in its design,
+/// only in its division, or in both. `slides` empty means "the projection's
+/// slides", which keeps the ordinary case free.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct ViewDivision {
+    /// The design this view shows the chapter in, where that is not the
+    /// chapter's own.
+    #[serde(default)]
+    pub design: Option<PresentationDesign>,
+
+    /// A second division of the same song.
+    ///
+    /// Empty — the ordinary case — means this view shows the projection's own
+    /// slides, and nothing here has to be kept in step with anything. A second
+    /// set only exists where the view asked for one, and then [`map`](Self::map)
+    /// says which of these slides each slide of the projection is showing part
+    /// of.
+    #[serde(default)]
+    pub slides: Vec<Slide>,
+
+    /// For every slide of the projection, the index into [`slides`](Self::slides)
+    /// that shows it.
+    ///
+    /// Worked out once, when the slides are generated, rather than every time a
+    /// viewer is told where things stand: it depends only on the two sets of
+    /// slides, and both are fixed for as long as the presentation runs.
+    #[serde(default)]
+    pub map: Vec<usize>,
 }
 
 /// How many slides of `division` come before `chapter`.
@@ -1023,13 +1050,17 @@ pub fn slides_before(chapters: &[SlideChapter], chapter: usize, division: Divisi
         .sum()
 }
 
-/// Which of the two sets of slides a service has is meant.
+/// Which set of slides a service has is meant.
 ///
-/// A service may give the phones a division of its own — a song that goes two
-/// lines at a time on the wall and four on a phone — and from then on there
-/// are two answers to every question about slides: which one is up, how many
-/// there are, how far through the service it is. See
-/// [`SlideChapter::stream_slides`].
+/// A view may be given a division of its own — a song that goes two lines at a
+/// time on the wall and four on a phone — and from then on there are as many
+/// answers to every question about slides as there are views that asked: which
+/// one is up, how many there are, how far through the service it is.
+///
+/// This was a pair, `Projection` and `Stream`, from when a service had exactly
+/// two outputs. A view is named by its own identity now, so that a second
+/// network view is a second division rather than a second special case. See
+/// [`SlideChapter::view_slides`].
 ///
 /// A value rather than a second set of methods because everything that counts
 /// slides counts them the same way and differs only in which set it is
@@ -1040,10 +1071,12 @@ pub fn slides_before(chapters: &[SlideChapter], chapter: usize, division: Divisi
 /// same.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Division {
-    /// What the wall shows.
+    /// What the wall shows: the reference view's slides, which every other
+    /// division is described against.
     Projection,
-    /// What the phones show, where that is not the same.
-    Stream,
+    /// What one view shows, where that is not the same. Named by the view's
+    /// own [`id`](crate::logic::settings::View::id).
+    View(Uuid),
 }
 
 fn default_presentation_resolution() -> (u32, u32) {
@@ -1073,11 +1106,26 @@ mod tests {
         let first = SlideChapter::new(slides(3), source("Erstes Lied"), None, None);
 
         let mut second = SlideChapter::new(slides(4), source("Zweites Lied"), None, None);
-        second.stream_slides = Some(slides(2));
-        // Two of the wall's slides to each of the phones'.
-        second.stream_slide_map = vec![0, 0, 1, 1];
+        second.view_slides.insert(
+            phones(),
+            ViewDivision {
+                design: None,
+                slides: slides(2),
+                // Two of the wall's slides to each of the phones'.
+                map: vec![0, 0, 1, 1],
+            },
+        );
 
         RunningPresentation::new(vec![first, second])
+    }
+
+    /// The view the phones are, as this fixture names it.
+    ///
+    /// A fixed identity so that the tests can ask about the same view the
+    /// fixture built a division for. Any two would do; what matters is that
+    /// they are the same one.
+    fn phones() -> Uuid {
+        Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_0001)
     }
 
     /// Both counters count the service, not the song.
@@ -1095,7 +1143,7 @@ mod tests {
         // song has no division of its own.
         running.jump_to(0, 1);
         assert_eq!(running.counter_in(Division::Projection), Some((2, 7)));
-        assert_eq!(running.counter_in(Division::Stream), Some((2, 5)));
+        assert_eq!(running.counter_in(Division::View(phones())), Some((2, 5)));
 
         // The third slide of the second song is the sixth of the service on
         // the wall, and the second of that song on a phone — which is the
@@ -1103,7 +1151,7 @@ mod tests {
         running.jump_to(1, 2);
         assert_eq!(running.counter_in(Division::Projection), Some((6, 7)));
         assert_eq!(
-            running.counter_in(Division::Stream),
+            running.counter_in(Division::View(phones())),
             Some((5, 5)),
             "three slides of the first song and the second of the phones' two"
         );
@@ -1142,7 +1190,7 @@ mod tests {
         running.position = None;
 
         assert_eq!(running.counter_in(Division::Projection), None);
-        assert_eq!(running.counter_in(Division::Stream), None);
+        assert_eq!(running.counter_in(Division::View(phones())), None);
     }
 
     /// A seek to the same second twice is two commands. Without the count the

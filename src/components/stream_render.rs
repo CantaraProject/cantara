@@ -650,16 +650,26 @@ mod tests {
         );
         // What `StreamDefaults` puts on a chapter when the stream view names a
         // design of its own.
-        chapter.stream_design_option = Some(monitor_design(
-            MonitorLayout::SlideList { context: None },
-            Vec::new(),
-        ));
+        let phones = uuid::Uuid::from_u128(5);
+        chapter.view_slides.insert(
+            phones,
+            crate::logic::states::ViewDivision {
+                design: Some(monitor_design(
+                    MonitorLayout::SlideList { context: None },
+                    Vec::new(),
+                )),
+                ..crate::logic::states::ViewDivision::default()
+            },
+        );
 
         let mut running = RunningPresentation::new(vec![chapter]);
         running.jump_to(0, 0);
 
         // Exactly what `network_host::publish` renders with.
-        let html = render_presentation(&running, Some(running.get_current_stream_design()));
+        let html = render_presentation(
+            &running,
+            Some(running.current_design_in(crate::logic::states::Division::View(phones))),
+        );
 
         assert!(
             html.contains("monitor-view"),
