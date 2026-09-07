@@ -295,6 +295,13 @@
 
   // The last state drawn, so an update saying the same thing is ignored rather
   // than redrawing the page under someone's eyes.
+  // Which view this page is showing, put in by the server when it served the
+  // address this page was opened at. Sent back with every request, so that two
+  // addresses on one socket are two views rather than two ways to the same
+  // slides.
+  var viewId = 'CANTARA_VIEW_ID';
+  var viewQuery = viewId ? '?view=' + encodeURIComponent(viewId) : '';
+
   var drawnRevision = -1;
   var source = null;
 
@@ -649,7 +656,7 @@
     if (source) source.close();
     setConnection('opening');
 
-    source = new EventSource('events');
+    source = new EventSource('events' + viewQuery);
 
     source.addEventListener('open', function () {
       setConnection('open');
@@ -673,7 +680,7 @@
       // exception is a password: the stream is refused outright, and no amount
       // of retrying will help.
       setConnection('lost');
-      fetch('state').then(function (response) {
+      fetch('state' + viewQuery).then(function (response) {
         if (response.status === 401) {
           source.close();
           source = null;
@@ -686,7 +693,7 @@
 
   // Find out whether a password is wanted before opening the stream, so a
   // protected presentation asks once rather than flickering through an error.
-  fetch('state')
+  fetch('state' + viewQuery)
     .then(function (response) {
       if (response.status === 401) {
         askForPassword();

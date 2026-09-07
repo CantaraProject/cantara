@@ -184,6 +184,21 @@ selection:
       reference_note:
         en: "Slide numbers and every other view are counted against this one, so it cannot be removed."
         de: "Foliennummern und alle anderen Darstellungen beziehen sich auf diese, deshalb kann sie nicht entfernt werden."
+      path:
+        en: Address
+        de: Adresse
+      path_empty:
+        en: "An address is needed, for example /stage."
+        de: "Eine Adresse wird benötigt, zum Beispiel /buehne."
+      path_not_absolute:
+        en: "An address begins with a slash, for example /stage."
+        de: "Eine Adresse beginnt mit einem Schrägstrich, zum Beispiel /buehne."
+      path_bad_character:
+        en: "Only letters, digits, - and _ after the slash."
+        de: "Nach dem Schrägstrich nur Buchstaben, Ziffern, - und _."
+      path_reserved:
+        en: "This address is already used by Cantara itself."
+        de: "Diese Adresse verwendet Cantara bereits selbst."
       network_note:
         en: "Switch the stream on below to show this view on the network."
         de: "Die Übertragung unten einschalten, um diese Darstellung im Netzwerk anzuzeigen."

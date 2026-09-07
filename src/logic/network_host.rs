@@ -66,13 +66,18 @@ impl Drop for Helper {
 }
 
 /// Starts offering the stream to viewers, and says where to find it.
-pub fn enable_viewer(port: u16, password: String, view: uuid::Uuid) -> Result<String, String> {
+pub fn enable_viewer(
+    port: u16,
+    password: String,
+    views: Vec<super::network_server::ServedView>,
+) -> Result<String, String> {
     offer(port, |offer| {
         offer.viewer = Some(password.clone());
-        // Which view the helper is serving. A chapter holds a division per
-        // view, and without this the helper would serve the projection's
-        // slides whatever the stream view was set to.
-        offer.viewer_view = Some(view);
+        // Which view is served at which address. A chapter holds a division
+        // per view, so without this the helper would not know which slides
+        // belong at which address — and with only one it would serve the
+        // projection's whatever the view was set to.
+        offer.views = views;
     })
 }
 
@@ -460,21 +465,30 @@ pub fn publish(presentation: Option<RunningPresentation>) {
     // `get_current_stream_design` is what `StreamState::of` already reads,
     // so the rendering and the rest of the payload cannot disagree about
     // what the phones are being shown.
-    // Which view the helper is serving, so that the rendering is of the same
-    // slides its state describes. The helper was told this when the stream was
-    // switched on; asking it here is what keeps the two from disagreeing.
-    let division = match helper.offer.viewer_view {
-        Some(id) => crate::logic::states::Division::View(id),
-        None => crate::logic::states::Division::Projection,
-    };
-    let rendered = presentation.as_ref().map(|running| {
-        crate::components::stream_render::for_network(
-            &crate::components::stream_render::render_presentation(
-                running,
-                Some(running.current_design_in(division)),
-            ),
-        )
-    });
+    // One rendering per view the helper is serving, so that each address shows
+    // the slides its own state describes. The helper was told which views when
+    // the stream was switched on; asking it here is what keeps the two from
+    // disagreeing.
+    //
+    // Rendered once per view per change, not once per viewer: that is the
+    // property that made a static page the right answer for a congregation,
+    // and it survives having several of them.
+    let mut rendered: std::collections::HashMap<uuid::Uuid, String> =
+        std::collections::HashMap::new();
+    if let Some(running) = presentation.as_ref() {
+        for view in &helper.offer.views {
+            let division = crate::logic::states::Division::View(view.id);
+            rendered.insert(
+                view.id,
+                crate::components::stream_render::for_network(
+                    &crate::components::stream_render::render_presentation(
+                        running,
+                        Some(running.current_design_in(division)),
+                    ),
+                ),
+            );
+        }
+    }
 
     // A helper that will not take it is a helper that has gone. Dropping it
     // here is what puts the switches back to where the truth is.
@@ -606,7 +620,14 @@ mod tests {
 
         // Port 0: whatever is free, so that a machine already running Cantara
         // does not fail this.
-        let address = match enable_viewer(0, String::new(), uuid::Uuid::nil()) {
+        let address = match enable_viewer(
+            0,
+            String::new(),
+            vec![crate::logic::network_server::ServedView {
+                path: "/".to_string(),
+                id: uuid::Uuid::nil(),
+            }],
+        ) {
             Ok(address) => address,
             Err(reason) => panic!("the switch did not go on: {reason}"),
         };

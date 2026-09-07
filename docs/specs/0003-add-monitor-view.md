@@ -18,9 +18,8 @@ The speaker layout can put the next slide **below or beside** the current one,
 and both are drawn at the presentation's own size and scaled to fit — see
 [Fitting a slide into a smaller box](#fitting-a-slide-into-a-smaller-box).
 
-Not done: several network views at different paths (stage 3b, and 3b′ before
-it), enabling a view *during* a running service, `MonitorLayout::Custom`, and
-WebAssembly widgets.
+Not done: enabling a view *during* a running service, `MonitorLayout::Custom`,
+and WebAssembly widgets.
 
 Cantara today can put a service onto exactly two surfaces, and both of them are
 aimed at the congregation: the projection, and — since [0002](0002-remote-control.md)
@@ -1035,9 +1034,44 @@ Sixty-seven call sites across seven files, and the projection is still the
 reference: slide numbers, the console's counting and the whole-multiple rule on
 divisions are all described against it, exactly as before.
 
-**Still to come — 3b itself.** The socket serves one network view. Serving
-several means a router per path and a state per view, which is now a change to
-the server alone rather than to the model underneath it.
+## 3b: several views on one socket
+
+Built on top of 3b′, and — as expected once the model was right — a change to
+the server alone.
+
+The server holds a state **per view** rather than one, and a map from address
+to view. `/state` and `/events` take the view as a query parameter; the page is
+told its own identity when it is served and sends it back with everything it
+asks for. Without that, two addresses would be two ways to the same slides.
+
+### Why the addresses are a lookup and not routes
+
+The router is built when the server goes up. What is on offer arrives
+afterwards — Cantara says so over the socket, and may say something different
+halfway through a service. A route cannot be added to a built `axum` router; a
+lookup can change under one. So a view's address is answered by the **fallback**
+handler, which resolves the path against what is currently offered and serves
+the page for that view, or a plain not-found for an address nobody was given.
+
+### One channel, not one per view
+
+Every viewer waits on the same channel and each remembers the revision it was
+last told. A change to one view wakes them all; the ones whose own view has not
+moved go back to sleep without sending. A hall's worth of phones is a hall's
+worth of sleeping tasks either way, and one channel is one thing to keep in
+step.
+
+### The editor offers addresses again
+
+A network view's path is editable, validated by the `check_network_path` that
+was written in stage 2 and until now had nothing to guard. A path already taken
+by another view is refused as well: two views on one address is two handlers on
+one path, and the second would never be reached. A new network view starts at
+the bare address if it is free and at one named after itself otherwise.
+
+Rendering is still **once per view per change**, not once per viewer — the
+property that made a static page the right answer for a congregation, and it
+survives having several of them.
 
 ## What the Android build said
 

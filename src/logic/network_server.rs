@@ -200,15 +200,27 @@ pub struct Configuration {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Offer {
     pub viewer: Option<String>,
-    /// Which view the stream serves, as the running order names it.
+    /// Every address the stream serves, and the view behind each.
     ///
-    /// Needed because a chapter now holds a division per view — see
-    /// [`crate::logic::states::Division`] — and this process has to be told
-    /// which one it is showing. `None` before Cantara has said, which reads as
-    /// the projection: the same slides the wall shows, which is what a viewer
-    /// was shown before any of this existed.
-    pub viewer_view: Option<uuid::Uuid>,
+    /// Needed because a chapter holds a division per view — see
+    /// [`crate::logic::states::Division`] — so this process has to be told not
+    /// only *that* it is streaming but which slides belong at which address.
+    ///
+    /// Empty before Cantara has said anything, which serves nothing: a viewer
+    /// who opens an address between services is told to wait, as they always
+    /// were.
+    #[serde(default)]
+    pub views: Vec<ServedView>,
     pub console: Option<String>,
+}
+
+/// One address the stream is served at, and the view it shows.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ServedView {
+    /// Where a browser finds it: `/`, `/stage`, `/band`.
+    pub path: String,
+    /// Which view's slides it shows, as the running order names it.
+    pub id: uuid::Uuid,
 }
 
 /// What travels from the parent to the child.
@@ -221,13 +233,15 @@ pub enum ToChild {
     /// the same value, because it is the same presentation.
     Presentation {
         presentation: Box<Option<RunningPresentation>>,
-        /// The same presentation as HTML, drawn by Cantara's own components.
+        /// The same presentation as HTML, drawn by Cantara's own components,
+        /// once per view being served.
         ///
         /// This process cannot render it: the pictures come from a cache
         /// filled off the library on disk, and which design a view uses is a
         /// setting — and the helper has neither, deliberately. See
         /// [`crate::components::stream_render`].
-        rendered: Option<String>,
+        #[serde(default)]
+        rendered: std::collections::HashMap<uuid::Uuid, String>,
     },
 
     /// A picture a slide refers to, rendered into bytes.
@@ -512,9 +526,10 @@ struct Shown {
     /// What this process is serving, so that it knows which view's slides a
     /// viewer is being shown. Kept in step by [`ToChild::Offering`].
     offer: Offer,
-    /// The presentation as HTML, as Cantara last rendered it. Passed straight
-    /// through into what viewers are served — see [`ToChild::Presentation`].
-    rendered: Option<String>,
+    /// The presentation as HTML, as Cantara last rendered it *for each view*.
+    /// Passed straight through into what viewers are served — see
+    /// [`ToChild::Presentation`].
+    rendered: std::collections::HashMap<uuid::Uuid, String>,
     /// Where the video on the current slide has got to. Sent several times a
     /// second while one is playing and not at all otherwise.
     video: Option<(f64, f64, bool)>,
@@ -584,27 +599,53 @@ impl Shown {
         }
     }
 
-    /// Which set of slides this process is serving.
+    /// Every set of slides this process is serving, by the view they belong
+    /// to.
     ///
-    /// One place, so that the state, the pictures and the videos cannot
+    /// One place, so that the states, the pictures and the videos cannot
     /// disagree about which view a viewer is looking at.
-    fn division(&self) -> crate::logic::states::Division {
-        match self.offer.viewer_view {
-            Some(id) => crate::logic::states::Division::View(id),
-            None => crate::logic::states::Division::Projection,
-        }
+    fn divisions(&self) -> Vec<(uuid::Uuid, crate::logic::states::Division)> {
+        self.offer
+            .views
+            .iter()
+            .map(|view| (view.id, crate::logic::states::Division::View(view.id)))
+            .collect()
     }
 
     /// Tells the viewers where things stand.
     fn publish(&self, server: &mut StreamServer) {
-        let state = match &self.presentation {
-            Some(running) => StreamState::of(running, 0, self.division())
-                .with_live_video(self.video)
-                .with_html(self.rendered.clone().unwrap_or_default()),
-            // Between services. The address stays open and says so.
-            None => StreamState::waiting(0),
-        };
-        server.publish(state);
+        // Where each address leads. Set on every publish rather than only when
+        // the offer changes: it is a map of a handful of entries, and one
+        // place that cannot fall out of step is worth more than the saving.
+        server.set_paths(
+            self.offer
+                .views
+                .iter()
+                .map(|view| (view.path.clone(), view.id))
+                .collect(),
+        );
+
+        let states = self
+            .divisions()
+            .into_iter()
+            .map(|(id, division)| {
+                let state = match &self.presentation {
+                    Some(running) => StreamState::of(running, 0, division)
+                        .with_live_video(self.video)
+                        .with_html(self.rendered_for(id)),
+                    // Between services. The address stays open and says so.
+                    None => StreamState::waiting(0),
+                };
+                (id, state)
+            })
+            .collect();
+
+        server.publish(states);
+    }
+
+    /// The rendering Cantara made for one view.
+    fn rendered_for(&self, view: uuid::Uuid) -> String {
+        self.rendered.get(&view).cloned().unwrap_or_default()
     }
 
     /// Says where the videos of this service are, so the server can serve them
@@ -619,13 +660,21 @@ impl Shown {
         let Some(running) = &self.presentation else {
             return;
         };
-        let state = StreamState::of(running, 0, self.division());
-        let sources = crate::logic::stream::protocol::media_sources(
-            std::slice::from_ref(running),
-            &[self.division()],
-        );
+        let divisions: Vec<_> = self
+            .divisions()
+            .into_iter()
+            .map(|(_, division)| division)
+            .collect();
+        let sources =
+            crate::logic::stream::protocol::media_sources(std::slice::from_ref(running), &divisions);
 
-        for id in state.videos() {
+        // Every division's videos, since a view may show one the wall does not.
+        let wanted: std::collections::HashSet<String> = divisions
+            .iter()
+            .flat_map(|&division| StreamState::of(running, 0, division).videos())
+            .collect();
+
+        for id in wanted {
             if server.has_video(&id) {
                 continue;
             }

@@ -1,7 +1,7 @@
 use crate::components::shared_components::SelectedItemPreview;
 use crate::logic::settings::{
-    AfterLastSlide, PresentationDesign, Settings, SlideTimerSettings, SlideTransition, View,
-    ViewOutput, use_settings,
+    AfterLastSlide, PathProblem, PresentationDesign, Settings, SlideTimerSettings, SlideTransition,
+    View, ViewOutput, check_network_path, use_settings,
 };
 use crate::logic::sourcefiles::SourceFileType;
 use crate::logic::states::SelectedItemRepresentation;
@@ -882,6 +882,10 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
         ViewOutput::Network { .. } => None,
     };
     let is_network = matches!(view.output, ViewOutput::Network { .. });
+    let network_path = match &view.output {
+        ViewOutput::Network { path } => path.clone(),
+        ViewOutput::Screen { .. } => String::new(),
+    };
 
     rsx! {
         div {
@@ -894,12 +898,14 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
                 select {
                     onchange: move |event: Event<FormData>| {
                         let output = match event.value().as_str() {
-                            // The stream's own address. Another path needs a
-                            // server that can serve it, which is stage 3b of
-                            // the spec and is not built — so the editor offers
-                            // the one path that works rather than a field
-                            // whose contents nothing would read.
-                            "network" => ViewOutput::Network { path: "/".to_string() },
+                            // A fresh network view starts at the bare address
+                            // if nothing has it yet, and otherwise at one named
+                            // after itself. Two views on one path is two
+                            // handlers on one address, and the second would
+                            // never be reached.
+                            "network" => ViewOutput::Network {
+                                path: free_network_path(&settings.read(), index),
+                            },
                             _ => ViewOutput::Screen { monitor_name: None },
                         };
                         let mut writing = settings.write();
@@ -919,6 +925,47 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
                         selected: is_network,
                         {t!("selection.presentation_options.views.output_network").to_string()}
                     }
+                }
+            }
+
+            if is_network {
+                label {
+                    {t!("selection.presentation_options.views.path").to_string()}
+                    input {
+                        r#type: "text",
+                        value: "{network_path}",
+                        onchange: move |event: Event<FormData>| {
+                            let wanted = event.value();
+                            let mut writing = settings.write();
+                            // Refused rather than stored where it cannot work:
+                            // an address the server already claims is two
+                            // handlers on one path, which is a panic in the
+                            // server thread at the moment a service starts.
+                            // See `check_network_path`.
+                            let taken = writing
+                                .views
+                                .iter()
+                                .enumerate()
+                                .any(|(other, view)| {
+                                    other != index
+                                        && matches!(
+                                            &view.output,
+                                            ViewOutput::Network { path } if *path == wanted
+                                        )
+                                });
+                            if check_network_path(&wanted).is_ok()
+                                && !taken
+                                && let Some(view) = writing.views.get_mut(index)
+                            {
+                                view.output = ViewOutput::Network { path: wanted };
+                            }
+                            drop(writing);
+                            settings.read().save();
+                        },
+                    }
+                }
+                if let Err(problem) = check_network_path(&network_path) {
+                    p { class: "view-row-warning", {path_problem(problem)} }
                 }
             }
 
@@ -956,6 +1003,48 @@ fn ViewOutputSelect(index: usize, view: View, is_reference: bool) -> Element {
             }
         }
     }
+}
+
+/// An address no other view has, for a view that has just become a network
+/// one.
+///
+/// The bare address if it is free — that is what a congregation is given and
+/// what most services need — and otherwise one named after the view's place in
+/// the list. Two views on one path is two handlers on one address, and the
+/// second is never reached.
+fn free_network_path(settings: &Settings, index: usize) -> String {
+    let taken = |wanted: &str| {
+        settings
+            .views
+            .iter()
+            .enumerate()
+            .any(|(other, view)| {
+                other != index
+                    && matches!(&view.output, ViewOutput::Network { path } if path == wanted)
+            })
+    };
+
+    if !taken("/") {
+        return "/".to_string();
+    }
+
+    (2..)
+        .map(|number| format!("/view{number}"))
+        .find(|candidate| !taken(candidate))
+        // The range is unbounded, so this cannot be reached; the bare address
+        // is a safe thing to answer with rather than a panic.
+        .unwrap_or_else(|| "/".to_string())
+}
+
+/// What is wrong with an address, in the user's own language.
+fn path_problem(problem: PathProblem) -> String {
+    let key = match problem {
+        PathProblem::Empty => "selection.presentation_options.views.path_empty",
+        PathProblem::NotAbsolute => "selection.presentation_options.views.path_not_absolute",
+        PathProblem::BadCharacter => "selection.presentation_options.views.path_bad_character",
+        PathProblem::Reserved => "selection.presentation_options.views.path_reserved",
+    };
+    t!(key).to_string()
 }
 
 /// The name a screen is stored under. See [`screen_label`].
@@ -1115,21 +1204,34 @@ fn StreamSwitch() -> Element {
                     }
 
                     let stream = settings.read().stream.clone();
-                    // Which view the helper is to serve. Without it the helper
-                    // would show the projection's slides whatever the stream
-                    // view was set to.
-                    let view = settings
+                    // Every address the helper is to serve, and the view
+                    // behind each. Without these the helper would not know
+                    // which slides belong at which address.
+                    let views: Vec<crate::logic::network_server::ServedView> = settings
                         .read()
-                        .stream_view()
-                        .map(|view| view.id)
-                        .unwrap_or_default();
+                        .views
+                        .iter()
+                        .filter(|view| view.enabled || matches!(
+                            view.output,
+                            ViewOutput::Network { .. }
+                        ))
+                        .filter_map(|view| match &view.output {
+                            ViewOutput::Network { path } => {
+                                Some(crate::logic::network_server::ServedView {
+                                    path: path.clone(),
+                                    id: view.id,
+                                })
+                            }
+                            ViewOutput::Screen { .. } => None,
+                        })
+                        .collect();
                     starting.set(true);
                     spawn(async move {
                         let started = starting_a_helper(move || {
                             crate::logic::network_host::enable_viewer(
                                 stream.port,
                                 stream.password,
-                                view,
+                                views,
                             )
                         })
                             .await;
