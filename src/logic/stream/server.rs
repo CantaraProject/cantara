@@ -497,12 +497,22 @@ impl Shared {
             return state.clone();
         }
 
-        // Whatever is being served, if anything is. Between services there is
-        // nothing at all, and the page is told to wait.
-        states
-            .values()
-            .next()
-            .cloned()
+        // Not "whatever happens to be first": a `HashMap`'s first value is an
+        // arbitrary one, so an address whose view is not being served would be
+        // shown *somebody else's* — a monitor view on the address the
+        // congregation was given, chosen at random and differently on the next
+        // start.
+        //
+        // The bare address's view is the one sensible answer, since that is
+        // what a viewer who typed the address without a path asked for. Where
+        // even that is not being served there is nothing to show, and the page
+        // is told to wait — which is true, and which an address that has just
+        // been added says until Cantara has sent the offer that includes it.
+        self.paths
+            .read()
+            .ok()
+            .and_then(|paths| paths.get("/").copied())
+            .and_then(|id| states.get(&id).cloned())
             .unwrap_or_else(|| StreamState::waiting(0))
     }
 }
@@ -537,6 +547,13 @@ async fn events(
 
     let receiver = shared.states.subscribe();
     let wanted = viewing.view;
+    // The bare address's view, read once: the stream below is long-lived and
+    // must not hold the lock, and this is what it falls back to.
+    let default_view = shared
+        .paths
+        .read()
+        .ok()
+        .and_then(|paths| paths.get("/").copied());
 
     // The first thing a viewer gets is where things stand *now*; after that,
     // every change as it happens.
@@ -572,10 +589,10 @@ async fn events(
                     let held = receiver.borrow_and_update();
                     match wanted.and_then(|id| held.get(&id)) {
                         Some(state) => state.clone(),
-                        None => held
-                            .values()
-                            .next()
-                            .cloned()
+                        // The same rule as `state_for`: never somebody else's
+                        // view chosen at random.
+                        None => default_view
+                            .and_then(|id| held.get(&id).cloned())
                             .unwrap_or_else(|| StreamState::waiting(0)),
                     }
                 };
@@ -1060,6 +1077,17 @@ mod tests {
             .to_string()
     }
 
+    /// Publishes one view, at the bare address.
+    ///
+    /// What nearly every test here means by "the stream": one view, reachable
+    /// without a path. Written once, so that a rule about how an address finds
+    /// its view — see `state_for` — does not have to be repeated into a dozen
+    /// fixtures.
+    fn publish_one(server: &mut StreamServer, state: StreamState) {
+        server.set_paths(HashMap::from([("/".to_string(), Uuid::nil())]));
+        server.publish(HashMap::from([(Uuid::nil(), state)]));
+    }
+
     fn at(server: &StreamServer, path: &str) -> String {
         format!("http://127.0.0.1:{}{}", server.port(), path)
     }
@@ -1106,14 +1134,14 @@ mod tests {
     #[test]
     fn what_is_published_is_what_is_served() {
         let mut server = serving("");
-        server.publish(HashMap::from([(Uuid::nil(), StreamState {
+        publish_one(&mut server, StreamState {
             running: true,
             chapters: vec![super::super::protocol::StreamChapter {
                 title: "Amazing Grace".to_string(),
                 slides: vec![],
             }],
             ..StreamState::default()
-        })]));
+        });
 
         let first: StreamState = client()
             .get(at(&server, "/state"))
@@ -1125,10 +1153,10 @@ mod tests {
         assert_eq!(first.chapters[0].title, "Amazing Grace");
         assert_eq!(first.revision, 1, "the first change is the first revision");
 
-        server.publish(HashMap::from([(Uuid::nil(), StreamState {
+        publish_one(&mut server, StreamState {
             running: true,
             ..StreamState::default()
-        })]));
+        });
         let second: StreamState = client()
             .get(at(&server, "/state"))
             .send()
@@ -1330,11 +1358,11 @@ mod tests {
             .expect("a mapped position");
 
         let mut server = serving("");
-        server.publish(HashMap::from([(Uuid::nil(), StreamState::of(
+        publish_one(&mut server, StreamState::of(
             &presentation,
             0,
             crate::logic::states::Division::View(phones),
-        ))]));
+        ));
 
         let served: StreamState = client()
             .get(at(&server, "/state"))
@@ -1441,14 +1469,14 @@ mod tests {
         use std::io::Read;
 
         let mut server = serving("");
-        server.publish(HashMap::from([(Uuid::nil(), StreamState {
+        publish_one(&mut server, StreamState {
             running: true,
             chapters: vec![super::super::protocol::StreamChapter {
                 title: "Amazing Grace".to_string(),
                 slides: vec![],
             }],
             ..StreamState::default()
-        })]));
+        });
 
         // Connecting *after* the change, and receiving without another one.
         let mut stream = client()
@@ -1695,6 +1723,62 @@ mod tests {
         );
     }
 
+    /// An address whose view is not being served shows *nothing*, never
+    /// somebody else's view.
+    ///
+    /// This is what turned a stale offer into the worst possible symptom: the
+    /// fallback took whichever state came first out of a `HashMap`, so the
+    /// address the congregation had been given could show a stage monitor —
+    /// arbitrarily, and differently on the next start.
+    #[test]
+    fn an_unknown_view_is_never_shown_someone_elses() {
+        let mut server = serving("");
+        let stage = Uuid::from_u128(14);
+
+        // Only the stage is being served; nothing is at the bare address.
+        server.set_paths(HashMap::from([("/stage".to_string(), stage)]));
+        server.publish(HashMap::from([(
+            stage,
+            StreamState::waiting(0).with_html("<p>for the stage</p>".to_string()),
+        )]));
+
+        let body = client()
+            .get(format!("{}?view={}", at(&server, "/state"), Uuid::from_u128(99)))
+            .send()
+            .expect("answers")
+            .text()
+            .expect("a body");
+
+        assert!(
+            !body.contains("for the stage"),
+            "an address was shown a view that is not its own: {body}"
+        );
+    }
+
+    /// Where the bare address *is* being served, that is what an unknown view
+    /// falls back to — a viewer who typed the address without a path asked for
+    /// exactly that.
+    #[test]
+    fn an_unknown_view_falls_back_to_the_bare_address() {
+        let mut server = serving("");
+        let pews = Uuid::from_u128(15);
+
+        server.set_paths(HashMap::from([("/".to_string(), pews)]));
+        server.publish(HashMap::from([(
+            pews,
+            StreamState::waiting(0).with_html("<p>for the pews</p>".to_string()),
+        )]));
+
+        let body = client()
+            .get(format!("{}?view={}", at(&server, "/state"), Uuid::from_u128(99)))
+            .send()
+            .expect("answers")
+            .text()
+            .expect("a body");
+
+        assert!(body.contains("for the pews"), "got: {body}");
+    }
+
     /// An address nobody was given is not an address.
     ///
     /// The fallback answers every path that is not a route, so it has to
@@ -1763,8 +1847,8 @@ mod tests {
     #[test]
     fn the_rendering_reaches_the_viewer() {
         let mut server = serving("");
-        server.publish(HashMap::from([(Uuid::nil(), StreamState::waiting(1)
-                .with_html("<div class=\"presentation\">Amazing grace</div>".to_string()),)]));
+        publish_one(&mut server, StreamState::waiting(1)
+                .with_html("<div class=\"presentation\">Amazing grace</div>".to_string()),);
 
         let body = client()
             .get(at(&server, "/state"))

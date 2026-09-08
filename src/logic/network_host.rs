@@ -81,6 +81,38 @@ pub fn enable_viewer(
     })
 }
 
+/// Says which addresses the stream serves, while it is already serving.
+///
+/// The list is settled when the switch is thrown, and it was then never looked
+/// at again: a view added, renamed or given a different address during a
+/// service did not reach the helper. Its new address answered "not found", and
+/// — worse — an address whose view the helper had never heard of fell back to
+/// whichever state happened to be first, so the congregation's address could
+/// show a stage monitor.
+///
+/// Does nothing when the stream is off, or when the list is what it already
+/// was: this is called on every change to the presentation, and a message per
+/// slide would be a message per slide for nothing.
+pub fn serve_views(views: Vec<super::network_server::ServedView>) {
+    let unchanged = {
+        let Ok(held) = helper().lock() else {
+            return;
+        };
+        match held.as_ref() {
+            // Nothing is being served, so there is nothing to correct. The
+            // switch will carry the current list when it is thrown.
+            Some(running) if running.offer.viewer.is_none() => true,
+            Some(running) => running.offer.views == views,
+            None => true,
+        }
+    };
+    if unchanged {
+        return;
+    }
+
+    let _ = offer(0, |offer| offer.views = views);
+}
+
 /// Stops offering it. The helper stays up while the console is still on.
 pub fn disable_viewer() {
     let _ = offer(0, |offer| offer.viewer = None);
@@ -582,7 +614,42 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
 
     /// Cantara's own half of starting the network server: the switch is
-    /// thrown, a helper appears, and the address it reports answers.
+    /// Serialises the tests that start a real helper.
+    ///
+    /// There is one helper per *process* — see [`helper`] — and `cargo test`
+    /// runs tests in parallel. Two tests that each switch the stream on and
+    /// off are then fighting over one global: one stops the helper the other
+    /// is in the middle of asking. It failed about one run in fifteen, which
+    /// is the worst rate for a thing like this.
+    static ONE_HELPER_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The helper binary, if there is one worth starting.
+    ///
+    /// Lifted out of the test below so a second test that needs a real helper
+    /// does not repeat the reasoning about what is lying in `target/debug`.
+    fn test_helper() -> Option<std::path::PathBuf> {
+        let helper = std::path::Path::new("target/debug/cantara.exe");
+        let helper = if helper.exists() {
+            helper
+        } else {
+            let unix = std::path::Path::new("target/debug/cantara");
+            if !unix.exists() {
+                eprintln!("skipped: the binary has not been built");
+                return None;
+            }
+            unix
+        };
+
+        if is_older_than_this_test(helper) {
+            eprintln!("skipped: target/debug/cantara is older than this test — `cargo build` first");
+            return None;
+        }
+
+        Some(helper.to_path_buf())
+    }
+
+    /// The switch is thrown, a helper appears, and the address it reports
+    /// answers.
     ///
     /// The half that had never been tested — under a test harness
     /// `current_exe` is the harness — and the half that has since broken
@@ -590,6 +657,12 @@ mod tests {
     /// been built.
     #[test]
     fn a_switch_puts_a_server_on_the_network() {
+        // A poisoned lock means another helper test panicked; the guard is
+        // still what serialises this one, so it is taken either way.
+        let _helper_test = ONE_HELPER_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+
         let helper = std::path::Path::new("target/debug/cantara.exe");
         let helper = if helper.exists() {
             helper
@@ -620,13 +693,25 @@ mod tests {
 
         // Port 0: whatever is free, so that a machine already running Cantara
         // does not fail this.
+        // Two views, because one of them is the case that was broken: a view
+        // at an address of its own answered "not found", and the bare address
+        // said the presentation had not begun. The helper is *started* with
+        // this offer — throwing the switch is what starts it — so nothing
+        // arrives afterwards to correct a helper that ignored it.
+        let stage = uuid::Uuid::from_u128(0x51a9e);
         let address = match enable_viewer(
             0,
             String::new(),
-            vec![crate::logic::network_server::ServedView {
-                path: "/".to_string(),
-                id: uuid::Uuid::nil(),
-            }],
+            vec![
+                crate::logic::network_server::ServedView {
+                    path: "/".to_string(),
+                    id: uuid::Uuid::nil(),
+                },
+                crate::logic::network_server::ServedView {
+                    path: "/test".to_string(),
+                    id: stage,
+                },
+            ],
         ) {
             Ok(address) => address,
             Err(reason) => panic!("the switch did not go on: {reason}"),
@@ -650,6 +735,38 @@ mod tests {
             answered.is_ok(),
             "nothing is listening on the address the panel shows: {address}"
         );
+
+        // The address a view was given answers, and answers with *its* view.
+        //
+        // This is what the report was: `/test` said "not found" because the
+        // helper had thrown away the offer it was started with, so it was
+        // serving no views at all — which is also why the bare address said
+        // the presentation had not begun.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("a client");
+
+        let named = client
+            .get(format!("http://127.0.0.1:{port}/test"))
+            .send()
+            .expect("the named address answers");
+        assert!(
+            named.status().is_success(),
+            "a view's own address was not served: {}",
+            named.status()
+        );
+        assert!(
+            named.text().unwrap_or_default().contains(&stage.to_string()),
+            "the page at /test was not told which view it shows"
+        );
+
+        // And an address nobody was given is still not an address.
+        let unknown = client
+            .get(format!("http://127.0.0.1:{port}/nothing-here"))
+            .send()
+            .expect("answers");
+        assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
 
         // And the console shares it, rather than taking one of its own.
         let console = enable_console(0, "control".to_string()).expect("the console goes on");
@@ -684,6 +801,143 @@ mod tests {
             return false;
         };
         helper < harness
+    }
+
+    /// Two network views, two addresses, two different renderings.
+    ///
+    /// Reported from a real service: with a monitor view at `/test` and a
+    /// plain one at `/`, *both* addresses showed the monitor. The rendering
+    /// itself is right — see `stream_render` — so this exercises the whole
+    /// way through: the offer, the paths the helper serves, the page each
+    /// address is given, and the state that page then asks for.
+    #[test]
+    fn two_addresses_show_their_own_view() {
+        // A poisoned lock means another helper test panicked; the guard is
+        // still what serialises this one, so it is taken either way.
+        let _helper_test = ONE_HELPER_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+
+        use crate::logic::settings::{
+            MonitorDesign, PresentationDesign, PresentationDesignSettings,
+        };
+        use crate::logic::stream_view::ViewDefaults;
+
+        let Some(helper) = test_helper() else {
+            return;
+        };
+        // SAFETY: single-threaded at this point in the test.
+        unsafe { std::env::set_var("CANTARA_TEST_HELPER", helper) };
+
+        let plain = uuid::Uuid::from_u128(30);
+        let monitor = uuid::Uuid::from_u128(31);
+
+        let address = enable_viewer(
+            0,
+            String::new(),
+            vec![
+                crate::logic::network_server::ServedView {
+                    path: "/".to_string(),
+                    id: plain,
+                },
+                crate::logic::network_server::ServedView {
+                    path: "/test".to_string(),
+                    id: monitor,
+                },
+            ],
+        )
+        .expect("the switch goes on");
+
+        let port = address
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse::<u16>().ok())
+            .expect("a port");
+
+        // A running order in which the monitor view — and only it — is shown a
+        // design of its own.
+        let item = crate::logic::states::SelectedItemRepresentation::new_with_sourcefile(
+            crate::logic::sourcefiles::SourceFile {
+                name: "Amazing Grace".to_string(),
+                path: std::path::PathBuf::from("testfiles/Amazing Grace.song"),
+                file_type: crate::logic::sourcefiles::SourceFileType::Song,
+                md5_hash: None,
+                relative_path: None,
+            },
+        );
+        let stage_design = PresentationDesign {
+            name: "Stage".to_string(),
+            description: String::new(),
+            presentation_design_settings: PresentationDesignSettings::Monitor(
+                MonitorDesign::default(),
+            ),
+        };
+        let mut running = crate::logic::presentation::build_presentation(
+            &vec![item],
+            &PresentationDesign::default(),
+            &cantara_songlib::slides::SlideSettings::default(),
+            &[
+                ViewDefaults {
+                    id: plain,
+                    design: None,
+                    slide_settings: None,
+                },
+                ViewDefaults {
+                    id: monitor,
+                    design: Some(stage_design),
+                    slide_settings: None,
+                },
+            ],
+            &[],
+        )
+        .expect("a presentation");
+        running.jump_to(0, 0);
+
+        publish(Some(running));
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("a client");
+
+        // What each address's page is told to ask for, then what it is given.
+        let shown = |path: &str| {
+            let page = client
+                .get(format!("http://127.0.0.1:{port}{path}"))
+                .send()
+                .expect("the address answers")
+                .text()
+                .expect("a body");
+            let id = page
+                .split("var viewId = '")
+                .nth(1)
+                .and_then(|rest| rest.split('\'').next())
+                .unwrap_or_default()
+                .to_string();
+            let state = client
+                .get(format!("http://127.0.0.1:{port}/state?view={id}"))
+                .send()
+                .expect("the state answers")
+                .text()
+                .expect("a body");
+            (id, state)
+        };
+
+        let (root_id, root_state) = shown("/");
+        let (test_id, test_state) = shown("/test");
+
+        assert_eq!(root_id, plain.to_string(), "/ was told the wrong view");
+        assert_eq!(test_id, monitor.to_string(), "/test was told the wrong view");
+        assert!(
+            test_state.contains("monitor-view"),
+            "/test is not the monitor view"
+        );
+        assert!(
+            !root_state.contains("monitor-view"),
+            "/ was given the monitor view as well"
+        );
+
+        disable_viewer();
     }
 
     /// The deadline has to be cleared on the handle that is *read from*, and

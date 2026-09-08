@@ -378,6 +378,31 @@ fn App() -> Element {
             // What is running, for both services at once: the network
             // server works out from it what a viewer is shown and hands the
             // same value to the console. See [`logic::network_server`].
+            // What the helper is serving, kept in step with the settings.
+            //
+            // The list is settled when the switch is thrown, and a view added
+            // or re-addressed during a service would otherwise never reach the
+            // helper: its address would answer "not found", and an address the
+            // helper did not know would be shown some other view's slides.
+            // Cheap and quiet when nothing has changed — see `serve_views`.
+            #[cfg(feature = "desktop")]
+            logic::network_host::serve_views(
+                settings
+                    .read()
+                    .views
+                    .iter()
+                    .filter_map(|view| match &view.output {
+                        logic::settings::ViewOutput::Network { path } => {
+                            Some(logic::network_server::ServedView {
+                                path: path.clone(),
+                                id: view.id,
+                            })
+                        }
+                        logic::settings::ViewOutput::Screen { .. } => None,
+                    })
+                    .collect(),
+            );
+
             #[cfg(feature = "desktop")]
             logic::network_host::publish(presentations.first().cloned());
 

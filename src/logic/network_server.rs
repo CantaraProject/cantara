@@ -351,6 +351,13 @@ fn read_line(socket: &TcpStream) -> Result<String, String> {
 /// console. One was found running an hour later, which is exactly the kind of
 /// thing a helper process must never do.
 fn serve(configuration: Configuration, socket: TcpStream) -> Result<(), String> {
+    // What this process is serving, to begin with.
+    //
+    // The offer arrives *twice* in the ordinary course of things: once here,
+    // in the configuration the helper is started with, and again as a message
+    // whenever the operator changes it. Taken before the configuration is
+    // taken apart below.
+    let started_with = configuration.offer.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -482,6 +489,15 @@ fn serve(configuration: Configuration, socket: TcpStream) -> Result<(), String> 
             });
         }
 
+        // What this process is serving, to begin with.
+        //
+        // The offer arrives *twice* in the ordinary course of things: once
+        // here, in the configuration the helper is started with, and again as
+        // a message whenever the operator changes it. Starting from the
+        // default meant the first of those was dropped — and since throwing
+        // the switch is what *starts* the helper, no message followed it. The
+        // helper therefore served no views at all: every address answered
+        // "not found" and the bare one said the presentation had not begun.
         // Everything Cantara has to say. Reading this is also how the helper
         // notices that Cantara has gone: the socket ends, and so does the
         // helper — see [`crate::logic::network_host`], which is the only thing
@@ -490,7 +506,14 @@ fn serve(configuration: Configuration, socket: TcpStream) -> Result<(), String> 
             use tokio::io::AsyncBufReadExt;
 
             let mut server = server;
-            let mut shown = Shown::default();
+            let mut shown = Shown {
+                offer: started_with,
+                ..Shown::default()
+            };
+            // The addresses are answered from a lookup rather than from routes
+            // — see `page_at` — so they have to be set before the first
+            // request, not only when a presentation first arrives.
+            shown.publish(&mut server);
             let mut reader = tokio::io::BufReader::new(from_parent);
             let mut line = String::new();
 
@@ -592,6 +615,11 @@ impl Shown {
                 // the stream only while there is one.
                 offering_viewers(offer.viewer.is_some());
                 server.set_viewer(offer.viewer);
+                // The addresses and the per-view states both come out of the
+                // offer, so a change to it has to reach them. Without this a
+                // view renamed mid-service would keep answering at its old
+                // address and not at its new one.
+                self.publish(server);
                 if let Ok(mut password) = console.password.write() {
                     *password = offer.console;
                 }

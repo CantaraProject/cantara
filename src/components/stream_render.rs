@@ -771,6 +771,109 @@ mod tests {
         );
     }
 
+    /// Three views: the projection, a monitor at one address and a plain
+    /// presentation at another. Each address gets its own rendering.
+    ///
+    /// Reported from a real service: both addresses showed the monitor. This
+    /// builds the same configuration and renders what the helper would render
+    /// for each.
+    #[test]
+    fn each_network_view_is_rendered_in_its_own_design() {
+        use crate::logic::settings::{
+            Settings, View, ViewFocus, ViewOutput,
+        };
+        use crate::logic::stream_view::ViewDefaults;
+
+        let mut settings = Settings {
+            presentation_designs: vec![
+                // 0: what the wall shows.
+                PresentationDesign::default(),
+                // 1: the stage monitor.
+                monitor_design(MonitorLayout::SlideList { context: None }, Vec::new()),
+            ],
+            default_design_index: 0,
+            ..Settings::default()
+        };
+
+        let screen = uuid::Uuid::from_u128(20);
+        let monitor = uuid::Uuid::from_u128(21);
+        let plain = uuid::Uuid::from_u128(22);
+        settings.views = vec![
+            View {
+                id: screen,
+                name: "Projection".to_string(),
+                design_index: None,
+                slide_settings_index: None,
+                output: ViewOutput::Screen { monitor_name: None },
+                enabled: true,
+                focus: ViewFocus::Follow,
+            },
+            View {
+                id: monitor,
+                name: "Monitor".to_string(),
+                design_index: Some(1),
+                slide_settings_index: None,
+                output: ViewOutput::Network {
+                    path: "/test".to_string(),
+                },
+                enabled: true,
+                focus: ViewFocus::Follow,
+            },
+            View {
+                id: plain,
+                name: "Stream".to_string(),
+                design_index: None,
+                slide_settings_index: None,
+                output: ViewOutput::Network {
+                    path: "/".to_string(),
+                },
+                enabled: true,
+                focus: ViewFocus::Follow,
+            },
+        ];
+        settings.reference_view_index = 0;
+
+        // The running order, built exactly as the program builds it.
+        let item = crate::logic::states::SelectedItemRepresentation::new_with_sourcefile(
+            SourceFile {
+                name: "Amazing Grace".to_string(),
+                path: std::path::PathBuf::from("testfiles/Amazing Grace.song"),
+                file_type: SourceFileType::Song,
+                md5_hash: None,
+                relative_path: None,
+            },
+        );
+        let mut running = crate::logic::presentation::build_presentation(
+            &vec![item],
+            &settings.default_presentation_design(),
+            &settings.default_song_slide_settings(),
+            &ViewDefaults::all(&settings),
+            &[],
+        )
+        .expect("a presentation");
+        running.jump_to(0, 0);
+
+        // What `network_host::publish` renders for each address.
+        let for_view = |id| {
+            render_presentation(
+                &running,
+                Some(running.current_design_in(crate::logic::states::Division::View(id))),
+            )
+        };
+
+        let at_test = for_view(monitor);
+        let at_root = for_view(plain);
+
+        assert!(
+            at_test.contains("monitor-view"),
+            "/test should be the monitor view: {at_test}"
+        );
+        assert!(
+            !at_root.contains("monitor-view"),
+            "/ was given the monitor view as well: {at_root}"
+        );
+    }
+
     /// A PDF page is drawn by pdf.js into a canvas, which no rendering without
     /// a browser can fill. The page travels as a picture instead, and the
     /// canvas becomes the request for it.
