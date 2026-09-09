@@ -497,30 +497,10 @@ pub fn publish(presentation: Option<RunningPresentation>) {
     // `get_current_stream_design` is what `StreamState::of` already reads,
     // so the rendering and the rest of the payload cannot disagree about
     // what the phones are being shown.
-    // One rendering per view the helper is serving, so that each address shows
-    // the slides its own state describes. The helper was told which views when
-    // the stream was switched on; asking it here is what keeps the two from
-    // disagreeing.
-    //
-    // Rendered once per view per change, not once per viewer: that is the
-    // property that made a static page the right answer for a congregation,
-    // and it survives having several of them.
-    let mut rendered: std::collections::HashMap<uuid::Uuid, String> =
-        std::collections::HashMap::new();
-    if let Some(running) = presentation.as_ref() {
-        for view in &helper.offer.views {
-            let division = crate::logic::states::Division::View(view.id);
-            rendered.insert(
-                view.id,
-                crate::components::stream_render::for_network(
-                    &crate::components::stream_render::render_presentation(
-                        running,
-                        Some(running.current_design_in(division)),
-                    ),
-                ),
-            );
-        }
-    }
+    let rendered = match presentation.as_ref() {
+        Some(running) => render_for_views(running, &helper.offer.views),
+        None => std::collections::HashMap::new(),
+    };
 
     // A helper that will not take it is a helper that has gone. Dropping it
     // here is what puts the switches back to where the truth is.
@@ -534,6 +514,37 @@ pub fn publish(presentation: Option<RunningPresentation>) {
         log::warn!("the network server stopped listening; it is off");
         held.take();
     }
+}
+
+/// The presentation as HTML, once for every view being served.
+///
+/// The one place a rendering is made. Both the ordinary publish and the
+/// once-a-second refresh for clocks go through it, so that what an address is
+/// shown cannot depend on which of the two last spoke — and so that the two
+/// cannot come to disagree about which design a view uses.
+///
+/// Rendered once per view per change, not once per viewer: that is the property
+/// that made a static page the right answer for a congregation, and it survives
+/// having several of them.
+fn render_for_views(
+    running: &RunningPresentation,
+    views: &[super::network_server::ServedView],
+) -> std::collections::HashMap<uuid::Uuid, String> {
+    views
+        .iter()
+        .map(|view| {
+            let division = crate::logic::states::Division::View(view.id);
+            (
+                view.id,
+                crate::components::stream_render::for_network(
+                    &crate::components::stream_render::render_presentation(
+                        running,
+                        Some(running.current_design_in(division)),
+                    ),
+                ),
+            )
+        })
+        .collect()
 }
 
 /// Renders again for the views whose design shows the time.
@@ -559,38 +570,30 @@ pub fn refresh_time_widgets() {
         return;
     };
 
-    // Only the views that actually show the time. Re-rendering the rest every
-    // second would be a slide rendered every second for nothing.
-    let live: Vec<(uuid::Uuid, crate::logic::states::Division)> = helper
-        .offer
-        .views
-        .iter()
-        .map(|view| (view.id, crate::logic::states::Division::View(view.id)))
-        .filter(|(_, division)| {
-            running
-                .current_design_in(*division)
-                .presentation_design_settings
-                .monitor()
-                .is_some_and(|monitor| monitor.has_live_widget())
-        })
-        .collect();
-
-    if live.is_empty() {
+    // Is there anything here that follows the clock? If not, this second costs
+    // nothing at all.
+    let ticking = helper.offer.views.iter().any(|view| {
+        running
+            .current_design_in(crate::logic::states::Division::View(view.id))
+            .presentation_design_settings
+            .monitor()
+            .is_some_and(|monitor| monitor.has_live_widget())
+    });
+    if !ticking {
         return;
     }
 
-    let mut rendered = std::collections::HashMap::new();
-    for (id, division) in live {
-        rendered.insert(
-            id,
-            crate::components::stream_render::for_network(
-                &crate::components::stream_render::render_presentation(
-                    &running,
-                    Some(running.current_design_in(division)),
-                ),
-            ),
-        );
-    }
+    // Every view, not only the ones with a clock on them.
+    //
+    // The helper is *given* the renderings, and what it is given replaces what
+    // it had — so a map holding only the ticking views left every other
+    // address with nothing at all. The bare address went blank a second after
+    // the presentation started, which is as bad as this gets.
+    //
+    // Rendering the others again costs a slide or two per second and is the
+    // same code path as an ordinary publish, which is worth more than the
+    // saving. See `render_for_views`.
+    let rendered = render_for_views(&running, &helper.offer.views);
 
     // The presentation itself has not changed, so `last_sent` is left as it
     // is: this is the same state drawn at a later moment, not a new one.
@@ -1008,6 +1011,96 @@ mod tests {
         );
 
         disable_viewer();
+    }
+
+    /// Every served address keeps its rendering when the clock ticks.
+    ///
+    /// The once-a-second refresh for clocks used to send a map holding only
+    /// the views that *have* a clock — and the helper replaces what it has
+    /// with what it is given, so every other address lost its rendering a
+    /// second after the presentation started. The bare address went blank
+    /// while the stage monitor beside it carried on.
+    #[test]
+    fn a_refresh_renders_for_every_view_not_only_the_ticking_one() {
+        use crate::logic::settings::{
+            MonitorDesign, MonitorWidget, PresentationDesign, PresentationDesignSettings,
+            WidgetKind, WidgetPlacement,
+        };
+        use crate::logic::stream_view::ViewDefaults;
+
+        let plain = uuid::Uuid::from_u128(40);
+        let ticking = uuid::Uuid::from_u128(41);
+
+        // A monitor design with a clock on it — the one that follows the
+        // clock — and a view that is shown the projection.
+        let with_clock = PresentationDesign {
+            name: "Stage".to_string(),
+            description: String::new(),
+            presentation_design_settings: PresentationDesignSettings::Monitor(MonitorDesign {
+                widgets: vec![MonitorWidget {
+                    kind: WidgetKind::Clock { with_date: false },
+                    placement: WidgetPlacement::TopRight,
+                }],
+                ..MonitorDesign::default()
+            }),
+        };
+
+        let item = crate::logic::states::SelectedItemRepresentation::new_with_sourcefile(
+            crate::logic::sourcefiles::SourceFile {
+                name: "Amazing Grace".to_string(),
+                path: std::path::PathBuf::from("testfiles/Amazing Grace.song"),
+                file_type: crate::logic::sourcefiles::SourceFileType::Song,
+                md5_hash: None,
+                relative_path: None,
+            },
+        );
+        let mut running = crate::logic::presentation::build_presentation(
+            &vec![item],
+            &PresentationDesign::default(),
+            &cantara_songlib::slides::SlideSettings::default(),
+            &[
+                ViewDefaults {
+                    id: plain,
+                    design: None,
+                    slide_settings: None,
+                },
+                ViewDefaults {
+                    id: ticking,
+                    design: Some(with_clock),
+                    slide_settings: None,
+                },
+            ],
+            &[],
+        )
+        .expect("a presentation");
+        running.jump_to(0, 0);
+
+        let views = vec![
+            crate::logic::network_server::ServedView {
+                path: "/".to_string(),
+                id: plain,
+            },
+            crate::logic::network_server::ServedView {
+                path: "/stage".to_string(),
+                id: ticking,
+            },
+        ];
+
+        let rendered = render_for_views(&running, &views);
+
+        assert!(
+            rendered.contains_key(&plain),
+            "the bare address lost its rendering"
+        );
+        assert!(rendered.contains_key(&ticking));
+        assert!(
+            rendered[&ticking].contains("monitor-view"),
+            "the stage is not the monitor view"
+        );
+        assert!(
+            !rendered[&plain].contains("monitor-view"),
+            "the bare address was given the monitor view"
+        );
     }
 
     /// The deadline has to be cleared on the handle that is *read from*, and

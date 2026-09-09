@@ -1159,6 +1159,43 @@ unsupported is worse than arithmetic that is dull and runs**, and **a default
 that hides everything when one step does not run is the same failure wearing a
 different hat**. Both fail silently and look like nothing was written.
 
+## The refresh took the other addresses down with it
+
+Adding the once-a-second refresh for clocks broke the addresses that have none.
+It sent a `rendered` map holding **only** the views with a clock on them, and
+the helper replaces what it has with what it is given — so a second after the
+presentation started, the bare address had no rendering at all and showed the
+page's "…" over an empty screen.
+
+The fix is one function. `render_for_views` is now the only place a rendering is
+made, and both the ordinary publish and the refresh go through it: what an
+address is shown cannot depend on which of the two last spoke, and the two
+cannot come to disagree about which design a view uses. The refresh still asks
+first whether *anything* being served follows the clock, so an ordinary service
+pays nothing — but when it does render, it renders for everything.
+
+Rendering the quiet views again costs a slide or two per second. That is worth
+more than the saving, because the saving is what broke it.
+
+## Fitting, and when a box has a size
+
+The measured fit was still not landing in the browser. A `ResizeObserver` is
+told when an *observed* size changes, and a box can arrive at its size without
+that being a change the observer reports — so a frame measured too early stayed
+unmeasured.
+
+It now asks again on the next animation frame while the box has no size,
+bounded at sixty tries and stopping if the frame has left the page, and the
+served page re-fits on `resize` and `orientationchange` as well. Verified in a
+browser by giving the wrapper its size *after* the script had already run once
+against a zero-sized viewport, with no resize event fired by hand: a 912×691
+frame settles at 0.475 and the 304×691 beside it at 0.1583, both exact.
+
+The shape of all three of these is the same and worth saying once more:
+**anything that depends on a single well-timed moment will eventually miss it.**
+The mount that never came, the observer that was not told, the map that held
+only part of what it replaced.
+
 ## Still open
 
 * Whether a pinned view should be able to *follow with an offset* ("always the

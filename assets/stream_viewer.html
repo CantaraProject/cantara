@@ -655,6 +655,13 @@
     /*CANTARA_SLIDE_SCALE*/
   }
 
+  // A phone turned on its side is a different box, and the slide in it has to
+  // be measured again. The script watches each frame, but a frame replaced by
+  // the next state has to be picked up too — so this is asked for on the
+  // window's own events as well, which costs nothing when there is no slide.
+  window.addEventListener('resize', fitSlides);
+  window.addEventListener('orientationchange', fitSlides);
+
   // ── Staying connected ────────────────────────────────────────────────────
 
   function setConnection(state) {

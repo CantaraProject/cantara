@@ -34,9 +34,23 @@
 
     var width = frame.clientWidth;
     var height = frame.clientHeight;
-    // Not laid out yet. Leaving it alone is right: this runs again on the next
-    // resize, and a scale computed from nothing would be zero.
-    if (!width || !height) return;
+
+    // Not laid out yet.
+    //
+    // Asking again on the next frame rather than waiting to be told: a box may
+    // get its size without its *observed* size changing in a way that fires an
+    // observer, and a slide left unscaled is a wall of letters. Bounded, so a
+    // frame that never gets a size — one on a slide that has been left — does
+    // not ask for ever.
+    if (!width || !height) {
+      var tries = (parseInt(frame.dataset.cantaraTries, 10) || 0) + 1;
+      frame.dataset.cantaraTries = tries;
+      if (tries < 60 && frame.isConnected) {
+        requestAnimationFrame(function () { fit(frame); });
+      }
+      return;
+    }
+    delete frame.dataset.cantaraTries;
 
     // The smaller of the two ratios is the one that fits in both directions,
     // which is what keeps the proportions.
