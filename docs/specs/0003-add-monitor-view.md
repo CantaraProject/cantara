@@ -1097,6 +1097,45 @@ The lesson is the same shape as the one about markup: **gate a module on what
 it is for, not on what it is not.** `not(wasm32)` is not a statement about
 anything; `feature = "desktop"` is.
 
+## Three follow-ups from a real service
+
+**The console's stream preview drew a plain slide.** It reached for
+`StaticSlideRendererComponent` directly, so the operator saw a single slide
+while the phones showed a stage monitor. Every other preview in the program had
+already been routed through `DesignedPresentation`; this one had been missed.
+Fourth place, same fix.
+
+**The clock stood still on a streamed monitor.** A window redraws its widgets on
+a timer of its own. A view served over the network is HTML rendered *when
+something changes*, and a second passing is not a change — so the time a slide
+came up stayed on the phone until the next slide. `refresh_time_widgets` renders
+again once a second, and only for views whose design actually carries a clock or
+a chapter timer (`MonitorDesign::has_live_widget`): an ordinary service must not
+pay for a slide rendered every second.
+
+**The slide was not scaled at all.** The speaker layout fitted its slides with
+
+```css
+transform: scale(min(calc(100cqw / var(--slide-width)), …));
+```
+
+which says exactly the right thing and is dropped whole by any engine without
+container-query *division*. Cantara's own web view is one of them, and a dropped
+declaration is no scaling: the current slide overflowed its box and the next one
+beside it was drawn at full size. I had flagged the support risk when writing
+it; flagging is not verifying.
+
+It is measured now, by `assets/monitor_slide_scale.js` — **one file**, which the
+window evaluates when a slide frame mounts and the served page runs after it is
+given new markup. The arithmetic is the same arithmetic; a second copy would be
+a second thing to get wrong. Measured in a browser at 1280×720: a 912×691 frame
+scales 1920×1080 by 0.475 to 912×513, and the 304×691 frame beside it by 0.1583
+to 304×171 — both inside their frames, both still 16:9.
+
+The lesson to keep: **CSS that is exactly right and unsupported is worse than
+arithmetic that is dull and runs**, because a dropped declaration fails silently
+and looks like nothing was written at all.
+
 ## Still open
 
 * Whether a pinned view should be able to *follow with an offset* ("always the

@@ -448,6 +448,21 @@ fn App() -> Element {
             }
         });
 
+        // A clock does not change when the presentation does.
+        //
+        // A monitor view served over the network is HTML rendered when
+        // something changes, and the passing of a second is not a change — so
+        // its clock and its chapter timer stood still between slides. This
+        // brings them round. It costs nothing unless a view being served
+        // actually shows the time; see `refresh_time_widgets`.
+        #[cfg(feature = "desktop")]
+        use_future(move || async move {
+            loop {
+                logic::timer::sleep(std::time::Duration::from_millis(1000)).await;
+                logic::network_host::refresh_time_widgets();
+            }
+        });
+
         // ── The remote console ───────────────────────────────────────────
         //
         // A slide change reaches the helper by two roads, because one of them

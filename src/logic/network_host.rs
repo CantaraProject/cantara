@@ -536,6 +536,76 @@ pub fn publish(presentation: Option<RunningPresentation>) {
     }
 }
 
+/// Renders again for the views whose design shows the time.
+///
+/// A monitor view may carry a clock or a timer counting the current element.
+/// In a window those redraw on a timer of their own; over the network they
+/// cannot, because what a viewer is shown is HTML rendered when *something
+/// changes* — and the passing of a second is not a change to the presentation.
+/// So a stage monitor on a phone showed the time the slide came up and held it
+/// there until the next slide.
+///
+/// Called on a timer. Does nothing at all unless a view being served is a
+/// monitor with such a widget on it, so an ordinary service pays nothing for
+/// this.
+pub fn refresh_time_widgets() {
+    let Ok(mut held) = helper().lock() else {
+        return;
+    };
+    let Some(helper) = held.as_mut() else {
+        return;
+    };
+    let Some(running) = helper.last_sent.clone() else {
+        return;
+    };
+
+    // Only the views that actually show the time. Re-rendering the rest every
+    // second would be a slide rendered every second for nothing.
+    let live: Vec<(uuid::Uuid, crate::logic::states::Division)> = helper
+        .offer
+        .views
+        .iter()
+        .map(|view| (view.id, crate::logic::states::Division::View(view.id)))
+        .filter(|(_, division)| {
+            running
+                .current_design_in(*division)
+                .presentation_design_settings
+                .monitor()
+                .is_some_and(|monitor| monitor.has_live_widget())
+        })
+        .collect();
+
+    if live.is_empty() {
+        return;
+    }
+
+    let mut rendered = std::collections::HashMap::new();
+    for (id, division) in live {
+        rendered.insert(
+            id,
+            crate::components::stream_render::for_network(
+                &crate::components::stream_render::render_presentation(
+                    &running,
+                    Some(running.current_design_in(division)),
+                ),
+            ),
+        );
+    }
+
+    // The presentation itself has not changed, so `last_sent` is left as it
+    // is: this is the same state drawn at a later moment, not a new one.
+    if !tell(
+        helper,
+        ToChild::Presentation {
+            presentation: Box::new(Some(running)),
+            rendered,
+        },
+    ) {
+        log::warn!("the network server stopped listening; it is off");
+        held.take();
+    }
+}
+
 /// Which pictures the helper has not been given yet.
 ///
 /// Asked before rendering rather than after, because rendering a PDF page is

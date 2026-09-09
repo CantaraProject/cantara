@@ -645,6 +645,16 @@
     return fresh;
   }
 
+  // Fits any slide the rendering carries into the box it was given.
+  //
+  // The script is Cantara's own, put in by the server; running it is all this
+  // page does. Guarded so that a page with no slide frames — the ordinary
+  // audience stream — costs nothing.
+  function fitSlides() {
+    if (!stage.querySelector('.monitor-slide-frame')) return;
+    /*CANTARA_SLIDE_SCALE*/
+  }
+
   // ── Staying connected ────────────────────────────────────────────────────
 
   function setConnection(state) {

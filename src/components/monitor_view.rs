@@ -31,6 +31,10 @@ rust_i18n::i18n!("locales", fallback = "en");
 /// What a monitor view looks like.
 const MONITOR_VIEW_CSS: Asset = asset!("/assets/monitor_view.css");
 
+/// Fits a slide into its box. See the file itself for why it is measured
+/// rather than expressed in CSS, and why it is one file rather than two.
+pub(crate) const SLIDE_SCALE_JS: &str = include_str!("../../assets/monitor_slide_scale.js");
+
 /// How often the widgets are redrawn.
 ///
 /// A clock showing minutes and a timer showing seconds both need a second at
@@ -274,6 +278,17 @@ fn SlideAtSlideSize(
         div {
             class: "monitor-slide-frame",
             style: "--slide-width: {width}px; --slide-height: {height}px;",
+            // Measured once the frame is on the page. A slide frame is created
+            // when the presentation reaches this slide, so this is the moment
+            // its size is knowable — and the script asks again on the next
+            // frame in case the layout has not settled.
+            onmounted: move |_| {
+                spawn(async move {
+                    if let Err(error) = document::eval(SLIDE_SCALE_JS).await {
+                        log::error!("could not fit the slide to its box: {error:?}");
+                    }
+                });
+            },
             div { class: "monitor-slide-stage",
                 StaticSlideRendererComponent { slide, presentation_design: design }
             }

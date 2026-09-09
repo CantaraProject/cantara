@@ -1197,7 +1197,6 @@ fn StreamPreview(running_presentation: Signal<RunningPresentation>) -> Element {
 
     let rp = running_presentation.read();
     let differs = rp.current_differs_in(division);
-    let slide = rp.current_slide_in(division);
     let design = rp.current_design_in(division);
     let blacked_out = rp.is_black_screen;
 
@@ -1268,21 +1267,34 @@ fn StreamPreview(running_presentation: Signal<RunningPresentation>) -> Element {
         }
 
         if differs {
-            if let Some(slide) = slide {
-                div {
+            div {
                     class: "presentation-preview slide-scale",
                     style: "width: {PREVIEW_WIDTH}px; height: {preview_height}px; border-radius: 4px;",
                     div {
                         class: "slide-scale-inner",
                         style: "width: {native_w}px; height: {native_h}px; transform: scale({scale});",
+                        // Drawn the way the view's design says, which for a
+                        // monitor design is its layout — this drew a single
+                        // slide whatever the design was, so the operator was
+                        // shown a plain slide while the phones showed a stage
+                        // monitor. Every other preview in the program goes
+                        // through the same component; this one had been
+                        // missed. See [`DesignedPresentation`].
+                        //
                         // Blacked out where the projection is: the phones go
                         // black with the wall, so a preview of them that did
                         // not would be showing the operator something nobody
-                        // can see. See [`StreamState::blacked_out`](crate::logic::stream::protocol::StreamState).
-                        StaticSlideRendererComponent {
-                            slide,
-                            presentation_design: design,
-                            blacked_out,
+                        // can see.
+                        crate::components::monitor_view::DesignedPresentation {
+                            running_presentation,
+                            design: design.clone(),
+                            role: PresentationRole::Follower,
+                            contained: true,
+                        }
+                        if blacked_out {
+                            div {
+                                style: crate::components::presentation_components::BLACK_SCREEN_STYLE,
+                            }
                         }
                     }
                     if let Some(counter) = counter {
@@ -1290,7 +1302,6 @@ fn StreamPreview(running_presentation: Signal<RunningPresentation>) -> Element {
                             { counter }
                         }
                     }
-                }
             }
         } else {
             // Streaming, and showing what the wall shows. A second picture of

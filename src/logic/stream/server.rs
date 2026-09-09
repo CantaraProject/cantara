@@ -389,11 +389,23 @@ const PRESENTATION_CSS: &str = include_str!("../../../assets/presentation.css");
 const CONSOLE_CSS: &str = include_str!("../../../assets/presenter_console.css");
 const MONITOR_CSS: &str = include_str!("../../../assets/monitor_view.css");
 
+/// Fits a slide into its box, on the page as in the window.
+///
+/// The same file the window evaluates — see
+/// [`crate::components::monitor_view::SLIDE_SCALE_JS`]. A slide's type is in
+/// points, so a slide put into a smaller box overflows it; the factor has to be
+/// measured, and measuring it twice in two dialects is how the two would come
+/// to disagree.
+const SLIDE_SCALE_JS: &str = include_str!("../../../assets/monitor_slide_scale.js");
+
 /// Where [`VIEWER_PAGE`] expects those stylesheets.
 const STYLE_MARKER: &str = "/*CANTARA_COMPONENT_STYLES*/";
 
 /// Where [`VIEWER_PAGE`] expects to be told which view it is showing.
 const VIEW_MARKER: &str = "CANTARA_VIEW_ID";
+
+/// Where [`VIEWER_PAGE`] expects the slide-fitting script.
+const SCALE_MARKER: &str = "/*CANTARA_SLIDE_SCALE*/";
 
 /// The page for whichever view is served at `/`.
 async fn page(State(shared): State<Arc<Shared>>) -> Response {
@@ -449,10 +461,12 @@ fn served_page(id: Option<Uuid>) -> Response {
 /// Split out from the handler so that what is served can be asserted on
 /// without a socket.
 fn dressed_viewer_page() -> String {
-    VIEWER_PAGE.replace(
-        STYLE_MARKER,
-        &format!("{PRESENTATION_CSS}\n{CONSOLE_CSS}\n{MONITOR_CSS}"),
-    )
+    VIEWER_PAGE
+        .replace(
+            STYLE_MARKER,
+            &format!("{PRESENTATION_CSS}\n{CONSOLE_CSS}\n{MONITOR_CSS}"),
+        )
+        .replace(SCALE_MARKER, SLIDE_SCALE_JS)
 }
 
 /// The engraver, asked for the first time a slide carries a staff.
@@ -1824,6 +1838,23 @@ mod tests {
         assert!(page.contains(".monitor-view"), "the monitor sheet is missing");
     }
 
+    /// The page carries the script that fits a slide into its box.
+    ///
+    /// A slide's type is in points, so a slide dropped into a box that is not
+    /// a screen overflows it. The factor has to be measured — it was CSS for a
+    /// while, and the engine dropped the declaration whole — and the page is
+    /// where the measuring happens for a viewer.
+    #[test]
+    fn the_page_carries_the_script_that_fits_a_slide() {
+        let page = dressed_viewer_page();
+
+        assert!(!page.contains(SCALE_MARKER), "the script was not put in");
+        assert!(
+            page.contains("monitor-slide-stage"),
+            "the script does not look like the one that fits slides"
+        );
+    }
+
     /// The page no longer draws a slide, so nothing in it may claim to.
     ///
     /// This is what keeps the duplication from creeping back: a second
@@ -1912,9 +1943,10 @@ mod tests {
             None,
         );
         let mut running = crate::logic::states::RunningPresentation::new(vec![chapter, pdf]);
-        running.jump_to(1, 0);
+        running.jump_to(0, 0);
 
-        // Switch this to a monitor design to look at a layout instead.
+        // A monitor design, because its layouts are what is worth looking at.
+        // Change the layout here to look at the other one.
         let design = crate::logic::settings::PresentationDesign {
             name: "Stage".to_string(),
             description: String::new(),
@@ -1929,11 +1961,9 @@ mod tests {
                     },
                 ),
         };
-        let _ = &design;
-
         let html = stream_render::for_network(&stream_render::render_presentation(
             &running,
-            Some(running.current_design_in(crate::logic::states::Division::Projection)),
+            Some(design),
         ));
 
         // The stylesheets the page carries, around the rendering and nothing
@@ -1945,7 +1975,8 @@ mod tests {
              <style>html,body{{margin:0;height:100%;background:#000;}}</style>\
              <style>{PRESENTATION_CSS}</style><style>{CONSOLE_CSS}</style>\
              <style>{MONITOR_CSS}</style></head>\
-             <body><div style=\"position:relative;width:100vw;height:100vh;\">{html}</div></body></html>"
+             <body><div style=\"position:relative;width:100vw;height:100vh;\">{html}</div>\
+             <script>{SLIDE_SCALE_JS}</script></body></html>"
         );
 
         let out = std::path::Path::new("target").join("served_page.html");

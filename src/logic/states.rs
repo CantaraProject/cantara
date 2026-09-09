@@ -674,19 +674,6 @@ impl RunningPresentation {
         ))
     }
 
-    /// The slide `division` is looking at.
-    ///
-    /// What the presenter console previews beside the projection's, so that a
-    /// moderator can see both of the things the congregation can see.
-    pub fn current_slide_in(&self, division: Division) -> Option<Slide> {
-        let (chapter_index, slide_index) = self.position_in(division)?;
-        self.presentation
-            .get(chapter_index)?
-            .slides_in(division)
-            .get(slide_index)
-            .cloned()
-    }
-
     /// Whether the chapter that is up shows `division` something other than
     /// what the projection shows.
     pub fn current_differs_in(&self, division: Division) -> bool {

@@ -2284,6 +2284,26 @@ pub struct MonitorDesign {
     pub widgets: Vec<MonitorWidget>,
 }
 
+impl MonitorDesign {
+    /// Whether anything on this view changes with the clock rather than with
+    /// the presentation.
+    ///
+    /// The window redraws its widgets on a timer of its own. A view served
+    /// over the network cannot: it is rendered to HTML when something changes,
+    /// and a clock is not something that changes — so a stage monitor on a
+    /// phone showed the time the slide came up and held it until the next
+    /// slide. Asked by [`crate::logic::network_host`], which re-renders while
+    /// this is true.
+    pub fn has_live_widget(&self) -> bool {
+        self.widgets.iter().any(|widget| {
+            matches!(
+                widget.kind,
+                WidgetKind::Clock { .. } | WidgetKind::ChapterTimer { .. }
+            )
+        })
+    }
+}
+
 /// How a monitor view arranges the slides.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum MonitorLayout {
@@ -3669,6 +3689,39 @@ mod tests {
             Uuid::nil(),
             "the view was given no identity at all"
         );
+    }
+
+    /// A design that shows the time says so.
+    ///
+    /// A window redraws its widgets on a timer of its own; a view served over
+    /// the network is HTML rendered when *something changes*, and a second
+    /// passing is not a change. So the clock on a streamed stage monitor stood
+    /// still between slides. `network_host` asks this and re-renders while it
+    /// is true — and, just as importantly, does not while it is false: an
+    /// ordinary service must not pay for a slide rendered every second.
+    #[test]
+    fn a_design_says_whether_anything_on_it_follows_the_clock() {
+        let still = MonitorDesign::default();
+        assert!(!still.has_live_widget(), "nothing here follows the clock");
+
+        for kind in [
+            WidgetKind::Clock { with_date: false },
+            WidgetKind::ChapterTimer {
+                warn_after_seconds: None,
+            },
+        ] {
+            let ticking = MonitorDesign {
+                widgets: vec![MonitorWidget {
+                    kind,
+                    placement: WidgetPlacement::TopRight,
+                }],
+                ..MonitorDesign::default()
+            };
+            assert!(
+                ticking.has_live_widget(),
+                "{kind:?} follows the clock and was not recognised"
+            );
+        }
     }
 
     /// A slide timer is kept inside what a browser's timer can be given.

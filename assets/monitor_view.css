@@ -159,23 +159,21 @@
 /* A slide drawn at the presentation's own size and shrunk to fit its box.
  *
  * A slide's type is set in *points*, which are absolute: put the renderer in a
- * small box and the words come out full size and overflow it. Every other
- * preview in Cantara therefore draws the slide at its native size and shrinks
- * the whole thing with a transform, and this has to as well.
+ * small box and the words come out full size and overflow it. So the slide is
+ * laid out at the presentation's own size — stated here in `--slide-width` and
+ * `--slide-height` — and the whole thing is shrunk with a transform.
  *
- * The others compute the factor in Rust from a width they know — a thumbnail
- * is 400 pixels because something said so. This box has no such width: it is a
- * share of a window whose size is the operator's business, and on the network
- * a share of a phone nobody here can measure. Measuring it in the browser
- * would work in a window and nowhere else, since the stream is served as
- * markup with no Dioxus behind it and so has no mount event to measure in.
+ * The transform itself is *not* here. It was, as
+ * `scale(min(calc(100cqw / var(--slide-width)), …))`, which says exactly the
+ * right thing and is dropped whole by any engine without container-query
+ * division — Cantara's own web view among them. A dropped declaration is no
+ * scaling at all, and the slide overflowed its box while the next one beside
+ * it was drawn at full size.
  *
- * So the browser works it out, from the box itself: the frame is a size
- * container and the stage is scaled by its width over the presentation's own.
- * `--slide-width` is the presentation's native width in pixels; dividing a
- * container-query length by it gives the plain number `scale()` wants. */
+ * It is measured instead, by `assets/monitor_slide_scale.js`, which the window
+ * evaluates and the page served to the network runs. One file, because the
+ * arithmetic is the same in both. */
 .monitor-slide-frame {
-    container-type: size;
     position: relative;
     width: 100%;
     height: 100%;
@@ -191,14 +189,10 @@
     width: var(--slide-width, 1920px);
     height: var(--slide-height, 1080px);
     transform-origin: top left;
-    /* Fit the box in both directions and keep the proportions: the smaller of
-     * the two ratios is the one that fits. An engine that cannot divide two
-     * lengths drops this and the slide is drawn unscaled — visibly wrong
-     * rather than silently squeezed, which is the better of the two failures. */
-    transform: scale(min(
-        calc(100cqw / var(--slide-width, 1920px)),
-        calc(100cqh / var(--slide-height, 1080px))
-    ));
+    /* Until it has been measured, nothing is drawn: a slide at full size in a
+     * small box is a wall of letters, and a flash of that on every slide
+     * change is worse than a frame of nothing. */
+    transform: scale(0);
 }
 
 /* The renderer inside fills the stage it was given. */
