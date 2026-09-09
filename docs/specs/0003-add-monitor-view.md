@@ -1128,13 +1128,36 @@ it; flagging is not verifying.
 It is measured now, by `assets/monitor_slide_scale.js` — **one file**, which the
 window evaluates when a slide frame mounts and the served page runs after it is
 given new markup. The arithmetic is the same arithmetic; a second copy would be
-a second thing to get wrong. Measured in a browser at 1280×720: a 912×691 frame
-scales 1920×1080 by 0.475 to 912×513, and the 304×691 frame beside it by 0.1583
-to 304×171 — both inside their frames, both still 16:9.
+a second thing to get wrong.
 
-The lesson to keep: **CSS that is exactly right and unsupported is worse than
-arithmetic that is dull and runs**, because a dropped declaration fails silently
-and looks like nothing was written at all.
+### And then nothing was drawn at all
+
+The first version set `transform: scale(0)` until the measuring had happened,
+reasoning that a wall of oversized letters is worse than a blank frame. That was
+wrong twice over. A frame that is never measured is then blank *for good* — and
+a frame is often not laid out in the tick it was put on the page, so measuring
+once and returning early on "no size yet" left it at nothing. The monitor showed
+its clock and its timer over an empty screen.
+
+Two changes, and the second is the one that matters:
+
+* **Watched, not measured once.** A `ResizeObserver` is told the moment a box
+  *has* a size, which is exactly the moment worth measuring, and again whenever
+  it changes. Measuring on a timer would have been guessing at how long to wait.
+* **The fallback is never invisible.** The container-query form is back as the
+  CSS default: where the engine supports it the slide is right before a line of
+  script has run, and where it does not the declaration is dropped and the slide
+  is drawn at full size — wrong, and *visible*. The script then sets the real
+  one either way.
+
+Measured in a browser at 1280×720, without touching anything by hand: a 912×691
+frame settles at scale 0.475 → 912×513, and the 304×691 frame beside it at
+0.1583 → 304×171. Both fill their frames, both still 16:9.
+
+Two lessons, and they are the same lesson: **CSS that is exactly right and
+unsupported is worse than arithmetic that is dull and runs**, and **a default
+that hides everything when one step does not run is the same failure wearing a
+different hat**. Both fail silently and look like nothing was written.
 
 ## Still open
 

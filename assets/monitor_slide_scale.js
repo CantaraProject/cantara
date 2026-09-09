@@ -54,18 +54,45 @@
     document.querySelectorAll('.monitor-slide-frame').forEach(fit);
   }
 
-  // Once now, and again whenever the window changes shape. Registered once
-  // however many times this is evaluated: the window evaluates it per slide
-  // frame, and a listener per frame per slide change would pile up for the
-  // whole of a service.
-  if (!window.__cantaraSlideScale) {
-    window.__cantaraSlideScale = true;
-    window.addEventListener('resize', fitAll);
+  // Watched rather than measured once.
+  //
+  // A frame is not always laid out in the tick it was put on the page: asked
+  // then, it reports no size, and a scale computed from nothing is nothing.
+  // Measuring on a timer would be guessing at how long to wait. A
+  // `ResizeObserver` is told the moment the box *has* a size, which is exactly
+  // the moment worth measuring — and again whenever it changes, so a window
+  // dragged to another screen refits without anything having to notice.
+  //
+  // One observer for the page, however many times this file is evaluated: the
+  // window evaluates it per slide frame, and an observer per frame per slide
+  // change would pile up over a service.
+  var observer = window.__cantaraSlideObserver;
+  if (!observer && typeof ResizeObserver === 'function') {
+    observer = new ResizeObserver(function (entries) {
+      entries.forEach(function (entry) { fit(entry.target); });
+    });
+    window.__cantaraSlideObserver = observer;
   }
 
-  // The frame may not be laid out in the same tick it was mounted in, so this
-  // is asked for again on the next frame. Both, rather than only the later
-  // one, so that a slide that *is* ready does not flash at full size first.
+  if (observer) {
+    document.querySelectorAll('.monitor-slide-frame').forEach(function (frame) {
+      // Observing the same element twice would call back twice; the flag says
+      // this one is already watched.
+      if (frame.dataset.cantaraObserved) return;
+      frame.dataset.cantaraObserved = 'yes';
+      observer.observe(frame);
+    });
+  } else {
+    // No observer to be had. Falling back to the window's own resize is worse
+    // — it says nothing about a box that has just appeared — but it is better
+    // than never measuring at all.
+    if (!window.__cantaraSlideScale) {
+      window.__cantaraSlideScale = true;
+      window.addEventListener('resize', fitAll);
+    }
+  }
+
+  // And now, for anything already laid out, so a slide that is ready does not
+  // wait for a callback.
   fitAll();
-  requestAnimationFrame(fitAll);
 })();

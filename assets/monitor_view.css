@@ -174,6 +174,9 @@
  * evaluates and the page served to the network runs. One file, because the
  * arithmetic is the same in both. */
 .monitor-slide-frame {
+    /* For the container-query fallback above. Harmless where that is
+     * unsupported, and it costs nothing. */
+    container-type: size;
     position: relative;
     width: 100%;
     height: 100%;
@@ -189,10 +192,24 @@
     width: var(--slide-width, 1920px);
     height: var(--slide-height, 1080px);
     transform-origin: top left;
-    /* Until it has been measured, nothing is drawn: a slide at full size in a
-     * small box is a wall of letters, and a flash of that on every slide
-     * change is worse than a frame of nothing. */
-    transform: scale(0);
+    /* A first guess, refined the moment the box has been measured.
+     *
+     * This was `scale(0)` — nothing drawn until the measuring had happened —
+     * on the reasoning that a wall of oversized letters is worse than a blank
+     * frame. It is not: a frame that is not measured *at all* is then blank
+     * for good, and that is what happened. A default that hides everything
+     * when one step does not run is the same mistake as a CSS declaration that
+     * is dropped whole; both fail silently and look like nothing was written.
+     *
+     * So the fallback is the container-query form. Where the engine supports
+     * it the slide is right before a line of script has run; where it does not
+     * the declaration is dropped and the slide is drawn at full size, which is
+     * wrong and *visible*. Either way `monitor_slide_scale.js` then measures
+     * and sets the real one. */
+    transform: scale(min(
+        calc(100cqw / var(--slide-width, 1920px)),
+        calc(100cqh / var(--slide-height, 1080px))
+    ));
 }
 
 /* The renderer inside fills the stage it was given. */
