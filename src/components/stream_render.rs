@@ -874,6 +874,60 @@ mod tests {
         );
     }
 
+    /// Two renderings a second apart differ *only* inside the widgets.
+    ///
+    /// The page leans on this: where that holds it replaces what the widgets
+    /// say and leaves everything else standing, rather than rebuilding the
+    /// stage every second — which lost the slide frames the size they had been
+    /// fitted to, restarted the video and re-engraved every staff.
+    ///
+    /// If a rendering ever came to differ elsewhere from one second to the
+    /// next, the page would fall back to rebuilding and the jump would be back.
+    /// This is what says it does not.
+    #[test]
+    fn a_second_later_only_the_widgets_have_changed() {
+        use crate::logic::timer::Timestamp;
+
+        let mut running = service();
+        running.jump_to(0, 0);
+
+        let design = monitor_design(
+            MonitorLayout::SlideList { context: None },
+            vec![MonitorWidget {
+                kind: WidgetKind::ChapterTimer {
+                    warn_after_seconds: None,
+                },
+                placement: WidgetPlacement::TopRight,
+            }],
+        );
+
+        // The same presentation, timed a second apart. The chapter clock is
+        // what the widget counts from, so moving it is moving the widget and
+        // nothing else.
+        let now = Timestamp::now();
+        running.chapter_entered_at = Some(now);
+        let before = render_presentation(&running, Some(design.clone()));
+        running.chapter_entered_at =
+            Some(Timestamp::from_milliseconds(now.milliseconds() - 1000));
+        let after = render_presentation(&running, Some(design));
+
+        assert_ne!(before, after, "the timer did not move at all");
+
+        // Everything outside the widgets is untouched — which is what the page
+        // checks for itself before patching.
+        let strip = |html: &str| {
+            html.split("monitor-widget")
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(
+            strip(&before),
+            strip(&after),
+            "a second's passing changed the slide as well as the widget"
+        );
+    }
+
     /// A PDF page is drawn by pdf.js into a canvas, which no rendering without
     /// a browser can fill. The page travels as a picture instead, and the
     /// canvas becomes the request for it.

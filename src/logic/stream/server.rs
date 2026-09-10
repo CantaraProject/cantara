@@ -1957,6 +1957,12 @@ mod tests {
                             next_slide_share: 0.25,
                             next_position: crate::logic::settings::SpeakerNextPosition::Right,
                         },
+                        // A clock, so the diagnostic exercises the path that
+                        // re-renders once a second.
+                        widgets: vec![crate::logic::settings::MonitorWidget {
+                            kind: crate::logic::settings::WidgetKind::Clock { with_date: false },
+                            placement: crate::logic::settings::WidgetPlacement::TopRight,
+                        }],
                         ..crate::logic::settings::MonitorDesign::default()
                     },
                 ),

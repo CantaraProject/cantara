@@ -605,14 +605,74 @@
     }
 
     if (html !== drawnHtml) {
+      // A clock ticking is not a slide change.
+      //
+      // A monitor view carrying a clock or a timer is re-rendered once a
+      // second, so the markup differs every second — but only inside the
+      // widgets. Rebuilding the stage for that tore down and rebuilt
+      // everything on it every second: the slide frames were re-created and
+      // so lost the size they had been fitted to (a visible jump back to
+      // unscaled, once a second), the video element was replaced and started
+      // again, and every staff was engraved afresh.
+      //
+      // So where the two differ *only* in what the widgets say, the widgets
+      // are the only thing replaced.
+      if (drawnHtml && onlyWidgetsDiffer(drawnHtml, html)) {
+        patchWidgets(html);
+      } else {
+        var playing = currentVideo;
+        stage.innerHTML = html;
+        currentVideo = adoptVideo(playing);
+        engraveStaves();
+        fitSlides();
+      }
       drawnHtml = html;
-      var playing = currentVideo;
-      stage.innerHTML = html;
-      currentVideo = adoptVideo(playing);
-      engraveStaves();
     }
 
     applyVideoState();
+  }
+
+  // The markup with the widgets emptied, for comparing two renderings by
+  // everything *except* what the widgets say.
+  function withoutWidgetText(markup) {
+    var box = document.createElement('div');
+    box.innerHTML = markup;
+    box.querySelectorAll('.monitor-widget').forEach(function (widget) {
+      widget.textContent = '';
+    });
+    return box.innerHTML;
+  }
+
+  // Whether two renderings are the same slide with a different time on it.
+  function onlyWidgetsDiffer(before, after) {
+    if (after.indexOf('monitor-widget') === -1) return false;
+    return withoutWidgetText(before) === withoutWidgetText(after);
+  }
+
+  // Replaces what the widgets say, and nothing else.
+  //
+  // Nothing moves, so nothing has to be measured or engraved again and the
+  // video is not touched — which is the whole point of coming here rather
+  // than rebuilding the stage.
+  function patchWidgets(markup) {
+    var box = document.createElement('div');
+    box.innerHTML = markup;
+    var fresh = box.querySelectorAll('.monitor-widget');
+    var live = stage.querySelectorAll('.monitor-widget');
+    // Only where they line up. They always do — the two renderings were just
+    // compared and found equal apart from these — but a mismatch would mean
+    // putting one widget's words into another, and a full rebuild is the
+    // honest answer to a surprise.
+    if (fresh.length !== live.length) {
+      stage.innerHTML = markup;
+      currentVideo = adoptVideo(currentVideo);
+      engraveStaves();
+      fitSlides();
+      return;
+    }
+    for (var index = 0; index < live.length; index++) {
+      live[index].innerHTML = fresh[index].innerHTML;
+    }
   }
 
   // Keeps a video playing across an update that redraws the stage.

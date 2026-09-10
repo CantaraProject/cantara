@@ -1196,6 +1196,32 @@ The shape of all three of these is the same and worth saying once more:
 The mount that never came, the observer that was not told, the map that held
 only part of what it replaced.
 
+## A clock ticking is not a slide change
+
+With the renderings restored, the fit was right for a second and then jumped
+back. The cause was the refresh again, from the other side: a monitor view with
+a clock is re-rendered once a second, so the markup differs every second — and
+the page rebuilt its whole stage for it.
+
+Rebuilding tore down and rebuilt everything on the stage every second. The slide
+frames were re-created, so they lost the size they had been fitted to; the video
+element was replaced and started again; every staff was engraved afresh. The
+visible part of that was the scale jumping back once a second, but the video
+restarting is the worse of the two.
+
+The page now compares the two renderings with the widgets blanked out. Where
+they are equal — the same slide with a different time on it — it replaces what
+the widgets *say* and nothing else. Nothing moves, so nothing has to be measured
+or engraved again and the video is not touched. Anything else is still a full
+rebuild, and a mismatch in the number of widgets falls back to one rather than
+putting one widget's words into another.
+
+Two tests, on both sides of the assumption. In Rust: two renderings a second
+apart differ only inside the widgets — if that ever stopped holding, the page
+would rebuild and the jump would return. In a browser, with real markup: the
+patch path is taken, the slide frame is *the same DOM node* afterwards, its
+fitted transform is untouched, and the clock reads the new time.
+
 ## Still open
 
 * Whether a pinned view should be able to *follow with an offset* ("always the
